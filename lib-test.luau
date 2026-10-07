@@ -432,6 +432,7 @@ local AccentClock = 0;
 local LastOff = nil
 
 game:GetService("RunService").Heartbeat:Connect(function(Dt)
+    if Library._ReduceAnimations then return end -- [MOBILE PATCH] static accent in lite mode
     AccentClock = AccentClock + Dt * 0.4
     local Off = (AccentClock % 2) - 1
     
@@ -735,6 +736,7 @@ end;
 -- [MOBILE PATCH] long-press on touch devices emulates a right-click
 function Library:BindLongPress(Button, Callback, HoldTime)
 	HoldTime = tonumber(HoldTime) or 0.5;
+	pcall(function() Button:SetAttribute("CoincideLP", true) end); -- [MOBILE PATCH] mark: element already has a long-press action
 	local Token = 0;
 	self:Connection(Button.InputBegan, function(Input)
 		if Input.UserInputType ~= Enum.UserInputType.Touch then return end;
@@ -764,6 +766,17 @@ function Library:BindLongPress(Button, Callback, HoldTime)
 			Callback();
 		end);
 	end);
+end;
+
+-- [MOBILE PATCH] keep popup coordinates inside the viewport
+function Library:ClampPopupXY(Popup, X, Y)
+	local Cam = Workspace.CurrentCamera;
+	local Vp = Cam and Cam.ViewportSize or Vector2.new(800, 600);
+	local W = (Popup and Popup.AbsoluteSize.X) or 0;
+	if W < 40 then W = 40 end;
+	X = math.clamp(X, 4, math.max(Vp.X - W - 4, 4));
+	Y = math.clamp(Y, 4, math.max(Vp.Y - 60, 4));
+	return X, Y;
 end;
 
 print("rn7")
@@ -933,6 +946,7 @@ function Library:Tooltip(Inst, Text)
 				self:_HideTooltip();
 				return;
 			end;
+			if self._TooltipTouch then return end; -- [MOBILE PATCH] touch tooltips dismissed on release, not mouse bounds
 			local MousePos = UserInputService:GetMouseLocation();
 			local Adjusted = MousePos - _GuiInsetVec;
 			local AbsPos   = ActiveInst.AbsolutePosition;
@@ -954,6 +968,7 @@ function Library:Tooltip(Inst, Text)
 	function self:_HideTooltip()
 		if not self._TooltipActive then return end;
 		self._TooltipActive = nil;
+		self._TooltipTouch  = nil; -- [MOBILE PATCH]
 		local Mine = (self._TooltipToken or 0) + 1;
 		self._TooltipToken = Mine;
 		Library:Tween(Frame, OutInfo, { GroupTransparency = 1 }):Play();
@@ -963,6 +978,7 @@ function Library:Tooltip(Inst, Text)
 	end;
 
 	self:Connection(Inst.MouseEnter, function()
+		self._TooltipTouch  = nil; -- [MOBILE PATCH]
 		self._TooltipActive = Inst;
 		self._TooltipToken  = (self._TooltipToken or 0) + 1;
 		local Mine = self._TooltipToken;
@@ -991,6 +1007,49 @@ function Library:Tooltip(Inst, Text)
 		if self._TooltipActive ~= Inst then return end;
 		self:_HideTooltip();
 	end);
+
+	-- [MOBILE PATCH] touch: press-and-hold to peek the tooltip
+	if IsMobilePlatform then
+		local HoldToken = 0;
+		local HoldStart = nil;
+		self:Connection(Inst.InputBegan, function(Input)
+			if Input.UserInputType ~= Enum.UserInputType.Touch then return end;
+			if Inst:GetAttribute("CoincideLP") then return end;
+			HoldToken += 1;
+			local Mine = HoldToken;
+			HoldStart = Vector2.new(Input.Position.X, Input.Position.Y);
+			task.delay(0.65, function()
+				if Mine ~= HoldToken or not HoldStart then return end;
+				if Inst:GetAttribute("CoincideLP") then return end;
+				self._TooltipActive     = Inst;
+				self._TooltipTouch      = true;
+				self._TooltipToken      = (self._TooltipToken or 0) + 1;
+				Lbl.Text                = tostring(Text);
+				Frame.Visible           = true;
+				Frame.GroupTransparency = 1;
+				local Cam = Workspace.CurrentCamera;
+				local Vp = Cam and Cam.ViewportSize or Vector2.new(800, 600);
+				local Tx = math.clamp(HoldStart.X + 12, 4, math.max(Vp.X - 170, 4));
+				local Ty = math.max(HoldStart.Y - 40, 4);
+				Frame.Position = UDim2.fromOffset(Tx, Ty);
+				Library:Tween(Frame, InInfo, { GroupTransparency = 0 }):Play();
+			end);
+		end);
+		self:Connection(Inst.InputChanged, function(Input)
+			if Input.UserInputType ~= Enum.UserInputType.Touch or not HoldStart then return end;
+			if (Vector2.new(Input.Position.X, Input.Position.Y) - HoldStart).Magnitude > 16 then
+				HoldToken += 1;
+				HoldStart = nil;
+				if self._TooltipActive == Inst then self:_HideTooltip() end;
+			end;
+		end);
+		self:Connection(Inst.InputEnded, function(Input)
+			if Input.UserInputType ~= Enum.UserInputType.Touch then return end;
+			HoldToken += 1;
+			HoldStart = nil;
+			if self._TooltipActive == Inst then self:_HideTooltip() end;
+		end);
+	end;
 end;
 
 
@@ -1230,7 +1289,30 @@ local function BuildSection(Host, SecOpts)
 			for _, Fn in Listeners do Fn(State) end;
 		end;
 
-		Row.MouseButton1Click:Connect(function() SetState(not State) end);
+		local SwipedAt = 0; -- [MOBILE PATCH]
+		Row.MouseButton1Click:Connect(function()
+			if os.clock() - SwipedAt < 0.25 then return end; -- [MOBILE PATCH] swipe already handled the toggle
+			SetState(not State);
+		end);
+
+		-- [MOBILE PATCH] horizontal swipe on the row: right = on, left = off
+		do
+			local SwipeStart = nil;
+			Row.InputBegan:Connect(function(Input)
+				if Input.UserInputType == Enum.UserInputType.Touch then
+					SwipeStart = Vector2.new(Input.Position.X, Input.Position.Y);
+				end;
+			end);
+			Row.InputEnded:Connect(function(Input)
+				if not SwipeStart or Input.UserInputType ~= Enum.UserInputType.Touch then return end;
+				local D = Vector2.new(Input.Position.X, Input.Position.Y) - SwipeStart;
+				SwipeStart = nil;
+				if math.abs(D.X) > 60 and math.abs(D.Y) < 28 then
+					SwipedAt = os.clock();
+					SetState(D.X > 0);
+				end;
+			end);
+		end;
 
 		if Opts.Tooltip then Library:Tooltip(Row, Opts.Tooltip) end;
 
@@ -2195,7 +2277,8 @@ local function BuildSection(Host, SecOpts)
 			local SlideOff  = 10;
 			local function AnchorXY()
 				local AbsP = Swatch.AbsolutePosition;
-				return AbsP.X - PickerHolder.AbsoluteSize.X + Swatch.AbsoluteSize.X, AbsP.Y + Swatch.AbsoluteSize.Y + 65;
+				local X, Y = AbsP.X - PickerHolder.AbsoluteSize.X + Swatch.AbsoluteSize.X, AbsP.Y + Swatch.AbsoluteSize.Y + 65;
+				return Library:ClampPopupXY(PickerHolder, X, Y); -- [MOBILE PATCH]
 			end;
 			local function SetVisible(B)
 				if B == Open then return end;
@@ -3562,7 +3645,8 @@ end;
 		local SlideOff   = 10;
 		local function AnchorXY()
 			local AbsP = Swatch.AbsolutePosition;
-			return AbsP.X - PickerHolder.AbsoluteSize.X + Swatch.AbsoluteSize.X, AbsP.Y + Swatch.AbsoluteSize.Y + 65;
+			local X, Y = AbsP.X - PickerHolder.AbsoluteSize.X + Swatch.AbsoluteSize.X, AbsP.Y + Swatch.AbsoluteSize.Y + 65;
+			return Library:ClampPopupXY(PickerHolder, X, Y); -- [MOBILE PATCH]
 		end;
 		local function SetVisible(B)
 			if B == Open then return end;
@@ -3943,7 +4027,8 @@ end;
 			local AbsPos  = Box.AbsolutePosition;
 			local AbsSize = Box.AbsoluteSize;
 			Popup.Size = UDim2.new(0, AbsSize.X, 0, 0);
-			return AbsPos.X, AbsPos.Y + AbsSize.Y + PopupGap;
+			local X, Y = AbsPos.X, AbsPos.Y + AbsSize.Y + PopupGap;
+			return Library:ClampPopupXY(Popup, X, Y); -- [MOBILE PATCH]
 		end;
 
 		ClosePopup = function()
@@ -4396,12 +4481,13 @@ end;
 			RefreshModeBtns();
 			local Ap = Box.AbsolutePosition;
 			local Sz = Box.AbsoluteSize;
+			local PX, PY = Library:ClampPopupXY(Popup, Ap.X + Sz.X - 80, Ap.Y + Sz.Y + 62); -- [MOBILE PATCH]
 			Popup.GroupTransparency = 1;
-			Popup.Position = UDim2.fromOffset(Ap.X + Sz.X - 80, Ap.Y + Sz.Y + 62 - PopupSlide);
+			Popup.Position = UDim2.fromOffset(PX, PY - PopupSlide);
 			Popup.Visible = true;
 			Library:Tween(Popup, PopupInfo, {
 				GroupTransparency = 0;
-				Position          = UDim2.fromOffset(Ap.X + Sz.X - 80, Ap.Y + Sz.Y + 62);
+				Position          = UDim2.fromOffset(PX, PY);
 			}):Play();
 		end;
 
@@ -5282,6 +5368,7 @@ RegisterGradLerp(GradEntry)
 	function Window:SetVisible(State)
 		if self.Visible == State then return end;
 		self.Visible = State and true or false;
+		if Library._ReduceAnimations then Gui.Enabled = self.Visible; return end; -- [MOBILE PATCH] lite mode: instant toggle, no tween storm
 		self._FadeToken = self._FadeToken + 1;
 		local Mine = self._FadeToken;
 		local Info = TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
@@ -6298,6 +6385,7 @@ function Library:Playerlist(Opts)
 	function Obj:SetVisible(State)
 		if self._Visible == State then return end;
 		self._Visible = State;
+		if Library._ReduceAnimations then Gui.Enabled = State and true or false; return end; -- [MOBILE PATCH] lite mode: instant toggle
 		FadeToken += 1;
 		local Mine = FadeToken;
 		local Info = TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
@@ -6847,6 +6935,7 @@ function Library:SettingsWindow(Opts)
 	function Obj:SetVisible(State)
 		if self._Visible == State then return end;
 		self._Visible = State;
+		if Library._ReduceAnimations then Gui.Enabled = State and true or false; return end; -- [MOBILE PATCH] lite mode: instant toggle
 		FadeToken += 1;
 		local Mine = FadeToken;
 		local Info = TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
@@ -7671,6 +7760,7 @@ function Library:PreviewWindow(Opts)
 	function Obj:SetVisible(State)
 		if self._Visible == State then return end;
 		self._Visible = State;
+		if Library._ReduceAnimations then Gui.Enabled = State and true or false; return end; -- [MOBILE PATCH] lite mode: instant toggle
 		FadeToken += 1;
 		local Mine = FadeToken;
 		local Info = TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
@@ -8043,6 +8133,7 @@ function Library:LogWindow(Opts)
 	function Obj:SetVisible(State)
 		if self._Visible == State then return end;
 		self._Visible = State;
+		if Library._ReduceAnimations then Gui.Enabled = State and true or false; return end; -- [MOBILE PATCH] lite mode: instant toggle
 		FadeToken += 1;
 		local Mine = FadeToken;
 		local Info = TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
@@ -8467,6 +8558,7 @@ local Outer = self:CreateInstance("Frame", {
 	function Obj:SetVisible(State)
 		if self._Visible == State then return end;
 		self._Visible = State;
+		if Library._ReduceAnimations then Gui.Enabled = State and true or false; return end; -- [MOBILE PATCH] lite mode: instant toggle
 		FadeToken += 1;
 		local Mine = FadeToken;
 		local Info = TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
@@ -9588,6 +9680,7 @@ function Library:InvViewer(Opts)
 	function Obj:SetVisible(State)
 		if self._Visible == State then return end;
 		self._Visible = State;
+		if Library._ReduceAnimations then Gui.Enabled = State and true or false; return end; -- [MOBILE PATCH] lite mode: instant toggle
 		FadeToken += 1;
 		local Mine = FadeToken;
 		local Info = TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
@@ -9668,12 +9761,18 @@ function Library:InvViewer(Opts)
 end;
 
 --============================================================
--- [MOBILE PATCH] Mobile support layer
---  - exposes Library.IsMobile
---  - floating draggable menu button (no keyboard on mobile)
+-- [MOBILE PATCH] Mobile support layer (v2)
+--  - Library.IsMobile / Library:SetReduceAnimations(B)
+--  - floating menu button: tap bounce, edge snap, menu-state tint
+--  - on-screen keyboard avoidance for TextBoxes
 --  - keeps every window inside the viewport on screen rotation
 --============================================================
 Library.IsMobile = IsMobilePlatform;
+Library._ReduceAnimations = false;
+
+function Library:SetReduceAnimations(B)
+	Library._ReduceAnimations = B and true or false;
+end;
 
 do
 	local GuiRoot = (gethui and gethui()) or CoreGui;
@@ -9681,10 +9780,52 @@ do
 	-- registry of every ScreenGui created after this point (all user windows)
 	local OrigCreateInstance = Library.CreateInstance;
 	Library._MobileRegistry = {};
+
+	-- [MOBILE PATCH] on-screen keyboard avoidance:
+	-- when a TextBox is focused and would hide behind the keyboard,
+	-- nudge its window up; restore the position on FocusLost.
+	function Library:_BindKeyboardAvoidance(Tb)
+		local SavedPos = nil;
+		Tb.Focused:Connect(function()
+			local Top = Tb;
+			while Top.Parent and not Top.Parent:IsA("ScreenGui") do Top = Top.Parent end;
+			if not (Top and Top.Parent and Top:IsA("GuiObject")) then return end;
+			local Cam = Workspace.CurrentCamera;
+			if not Cam then return end;
+			local Vp = Cam.ViewportSize;
+			task.defer(function()
+				if not Tb:IsFocused() then return end;
+				local TbBottom = Tb.AbsolutePosition.Y + Tb.AbsoluteSize.Y;
+				local SafeY = Vp.Y * 0.5; -- mobile keyboard covers the lower half
+				if TbBottom > SafeY then
+					SavedPos = Top.Position;
+					local Dy = TbBottom - SafeY;
+					Library:Tween(Top, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+						Position = SavedPos - UDim2.fromOffset(0, Dy);
+					}):Play();
+				end;
+			end);
+		end);
+		Tb.FocusLost:Connect(function()
+			if not SavedPos then return end;
+			local Top = Tb;
+			while Top.Parent and not Top.Parent:IsA("ScreenGui") do Top = Top.Parent end;
+			if not (Top and Top.Parent and Top:IsA("GuiObject")) then SavedPos = nil; return end;
+			Library:Tween(Top, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				Position = SavedPos;
+			}):Play();
+			SavedPos = nil;
+		end);
+	end;
+
 	Library.CreateInstance = function(Self, ClassName, Props)
 		local Inst = OrigCreateInstance(Self, ClassName, Props);
 		if ClassName == "ScreenGui" then
 			table.insert(Library._MobileRegistry, Inst);
+		elseif IsMobilePlatform and ClassName == "TextBox" then
+			task.defer(function()
+				if Inst.Parent then Library:_BindKeyboardAvoidance(Inst) end;
+			end);
 		end;
 		return Inst;
 	end;
@@ -9764,7 +9905,47 @@ do
 		});
 		Library:RegisterAccent(Stroke, "Color");
 
+		-- scale node for the tap bounce animation
+		local BtnScale = Library:CreateInstance("UIScale", { Parent = Btn; Scale = 1 });
+		local DarkBg   = Color3.fromHex("1A1A1A");
+
 		Library:Draggable(Btn);
+
+		local function PlayTapBounce()
+			if Library._ReduceAnimations then return end;
+			Library:Tween(BtnScale, TweenInfo.new(0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 0.82 }):Play();
+			task.delay(0.08, function()
+				Library:Tween(BtnScale, TweenInfo.new(0.35, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out), { Scale = 1 }):Play();
+			end);
+		end;
+
+		local function RefreshStateTint()
+			local Win = Library.CurrentlyOpen;
+			local OpenNow = Win and Win.Visible;
+			Library:Tween(Btn, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				BackgroundColor3 = OpenNow and Library.Accent or DarkBg;
+			}):Play();
+		end;
+
+		-- snap the button to the nearest screen edge after a drag
+		local function SnapToEdge()
+			local Cam2 = Workspace.CurrentCamera;
+			if not Cam2 then return end;
+			local Vp = Cam2.ViewportSize;
+			local W = Btn.AbsoluteSize.X;
+			local H = Btn.AbsoluteSize.Y;
+			if Vp.X <= 0 or W <= 0 then return end;
+			-- AnchorPoint is (1, 0.5): topLeftX = Vp.X + offX - W
+			local TopLeftX = Btn.Position.X.Offset - W;
+			local TopLeftY = Vp.Y * Btn.Position.Y.Scale + Btn.Position.Y.Offset - H * 0.5;
+			local GoLeft = (TopLeftX + W * 0.5) < Vp.X * 0.5;
+			local NewOffX = GoLeft and (14 + W - Vp.X) or -14;
+			local NewTopY = math.clamp(TopLeftY, 8, math.max(Vp.Y - H - 8, 8));
+			local NewOffY = NewTopY + H * 0.5 - Vp.Y * Btn.Position.Y.Scale;
+			Library:Tween(Btn, TweenInfo.new(0.25, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+				Position = UDim2.new(1, NewOffX, Btn.Position.Y.Scale, NewOffY);
+			}):Play();
+		end;
 
 		-- tap = toggle menu; drag = move button (decided by travel distance)
 		local DownPos = nil;
@@ -9779,16 +9960,22 @@ do
 			if Input.UserInputType ~= Enum.UserInputType.Touch
 				and Input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end;
 			local P = Vector2.new(Input.Position.X, Input.Position.Y);
-			if (P - DownPos).Magnitude <= 10 then
+			local Dist = (P - DownPos).Magnitude;
+			DownPos = nil;
+			if Dist <= 10 then
+				PlayTapBounce();
 				local Win = Library.CurrentlyOpen;
 				if Win then Win:Toggle() end;
+				task.defer(RefreshStateTint);
+			else
+				task.defer(SnapToEdge);
 			end;
-			DownPos = nil;
 		end);
 
 		local Obj = { Gui = BtnGui, Button = Btn };
 		function Obj:Show() BtnGui.Enabled = true end;
 		function Obj:Hide() BtnGui.Enabled = false end;
+		function Obj:Snap() SnapToEdge() end;
 		Library.MobileMenuButton = Obj;
 		return Obj;
 	end;
@@ -9796,6 +9983,9 @@ do
 	Library.CreateMobileMenuButton = CreateMobileMenuButton;
 
 	if IsMobilePlatform then
+		-- mobile defaults: lite animations (no fade tween storm, static accent wave) + faster tweens
+		Library:SetReduceAnimations(true);
+		Library.AnimationSpeed = math.max(tonumber(Library.AnimationSpeed) or 1, 1.5);
 		CreateMobileMenuButton();
 		task.defer(ClampAllWindows);
 	end;
