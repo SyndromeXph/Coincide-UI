@@ -12,14 +12,35 @@ local TweenService = game:GetService("TweenService");
 local GuiInset = GuiService:GetGuiInset().Y;
 
 -- [MOBILE PATCH] platform detection + size clamping helper
-local IsMobilePlatform = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled;
+-- PC / mobile auto-detection:
+--   1) getgenv().CoincideMobile = true/false  -> manual override (set BEFORE loadstring)
+--   2) no touch at all                        -> PC
+--   3) touch but no keyboard                  -> mobile / tablet
+--   4) touch + keyboard + small screen        -> small-screen device, treat as mobile
+--   5) touch + keyboard + large screen        -> PC (2-in-1 laptop etc.)
+local IsMobilePlatform = (function()
+	if getgenv and type(getgenv) == "function" then
+		local Ok, Env = pcall(getgenv);
+		if Ok and Env and Env.CoincideMobile ~= nil then
+			return Env.CoincideMobile and true or false;
+		end;
+	end;
+	if not UserInputService.TouchEnabled then return false end;
+	if not UserInputService.KeyboardEnabled then return true end;
+	local Cam = Workspace.CurrentCamera;
+	local Vp = Cam and Cam.ViewportSize or Vector2.new(800, 600);
+	return math.min(Vp.X, Vp.Y) < 500;
+end)();
+
+local MobileUIScaleValue = 1; -- [MOBILE PATCH] mirrors Library._UIScaleValue (file-level, set by the mobile layer)
 
 local function ClampWindowSize(Width, Height)
 	if not IsMobilePlatform then return Width, Height end;
 	local Cam = Workspace.CurrentCamera;
 	local Vp = Cam and Cam.ViewportSize or Vector2.new(800, 600);
-	local MaxW = math.max(Vp.X - 16, 220);
-	local MaxH = math.max(Vp.Y - 16, 220);
+	-- clamp the *rendered* size: unscaled units -> divide by the UI scale
+	local MaxW = math.max((Vp.X - 16) / MobileUIScaleValue, 220);
+	local MaxH = math.max((Vp.Y - 16) / MobileUIScaleValue, 220);
 	return math.min(Width, MaxW), math.min(Height, MaxH);
 end;
 
@@ -674,7 +695,8 @@ function Library:Draggable(TargetFrame, DragHandle)
 
 	local function Set(Input)
 		if not DragStart or not StartPosition then return end;
-		local Delta = Input.Position - DragStart;
+		local S = Library:_GetUIScaleOf(TargetFrame); -- [MOBILE PATCH] screen px -> offset units
+		local Delta = (Input.Position - DragStart) / S;
 		local NewX = StartPosition.X.Offset + Delta.X;
 		local NewY = StartPosition.Y.Offset + Delta.Y;
 		-- [MOBILE PATCH] clamp so the window can never be dragged off-screen
@@ -684,12 +706,12 @@ function Library:Draggable(TargetFrame, DragHandle)
 			local Ts = TargetFrame.AbsoluteSize;
 			local Ap = TargetFrame.AnchorPoint;
 			local Margin = 40;
-			local Tx = StartPosition.X.Scale * Ps.X + NewX - Ap.X * Ts.X;
-			local Ty = StartPosition.Y.Scale * Ps.Y + NewY - Ap.Y * Ts.Y;
+			local Tx = StartPosition.X.Scale * Ps.X + NewX * S - Ap.X * Ts.X;
+			local Ty = StartPosition.Y.Scale * Ps.Y + NewY * S - Ap.Y * Ts.Y;
 			Tx = math.clamp(Tx, -(Ts.X - Margin), math.max(Ps.X - Margin, 0));
 			Ty = math.clamp(Ty, 0, math.max(Ps.Y - Margin, 0));
-			NewX = Tx + Ap.X * Ts.X - StartPosition.X.Scale * Ps.X;
-			NewY = Ty + Ap.Y * Ts.Y - StartPosition.Y.Scale * Ps.Y;
+			NewX = (Tx + Ap.X * Ts.X - StartPosition.X.Scale * Ps.X) / S;
+			NewY = (Ty + Ap.Y * Ts.Y - StartPosition.Y.Scale * Ps.Y) / S;
 		end;
 		Library:Tween(TargetFrame, DragInfo, {
 			Position = UDim2.new(
@@ -768,6 +790,23 @@ function Library:BindLongPress(Button, Callback, HoldTime)
 	end);
 end;
 
+-- [MOBILE PATCH] effective UIScale of an element (own + ancestors)
+function Library:_GetUIScaleOf(Inst)
+	local S = 1;
+	local Cur = Inst;
+	while Cur do
+		if Cur:IsA("UIScale") then S = S * Cur.Scale end;
+		Cur = Cur.Parent;
+	end;
+	if Inst and Inst.GetChildren then
+		for _, C in Inst:GetChildren() do
+			if C:IsA("UIScale") then S = S * C.Scale end;
+		end;
+	end;
+	if S <= 0 then S = 1 end;
+	return S;
+end;
+
 -- [MOBILE PATCH] keep popup coordinates inside the viewport
 function Library:ClampPopupXY(Popup, X, Y)
 	local Cam = Workspace.CurrentCamera;
@@ -808,7 +847,8 @@ function Library:Resizable(TargetFrame, Minimum, Maximum)
 	self:Connection(Grip.InputBegan, function(Input)
 		if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
 			Resizing = true;
-			Start    = TargetFrame.Size - UDim2.new(0, Input.Position.X, 0, Input.Position.Y);
+			local S = Library:_GetUIScaleOf(TargetFrame); -- [MOBILE PATCH]
+			Start    = TargetFrame.Size - UDim2.new(0, Input.Position.X / S, 0, Input.Position.Y / S);
 		end;
 	end);
 
@@ -820,8 +860,9 @@ function Library:Resizable(TargetFrame, Minimum, Maximum)
 
 	self:Connection(UserInputService.InputChanged, function(Input)
 		if (Input.UserInputType == Enum.UserInputType.MouseMovement or Input.UserInputType == Enum.UserInputType.Touch) and Resizing then -- [MOBILE PATCH] touch resize
-			ResizeMax = Maximum or (TargetFrame.Parent.AbsoluteSize - TargetFrame.AbsoluteSize);
-			Delta = Start + UDim2.new(0, Input.Position.X, 0, Input.Position.Y);
+			local S = Library:_GetUIScaleOf(TargetFrame); -- [MOBILE PATCH]
+			ResizeMax = Maximum or (TargetFrame.Parent.AbsoluteSize / S);
+			Delta = Start + UDim2.new(0, Input.Position.X / S, 0, Input.Position.Y / S);
 			Delta = UDim2.new(
 				0, math.clamp(Delta.X.Offset, Minimum.X, ResizeMax.X),
 				0, math.clamp(Delta.Y.Offset, Minimum.Y, ResizeMax.Y)
@@ -9761,11 +9802,12 @@ function Library:InvViewer(Opts)
 end;
 
 --============================================================
--- [MOBILE PATCH] Mobile support layer (v2)
---  - Library.IsMobile / Library:SetReduceAnimations(B)
---  - floating menu button: tap bounce, edge snap, menu-state tint
+-- [MOBILE PATCH] Mobile support layer (v3)
+--  - PC / mobile auto-detect  (Library.IsMobile)
+--  - whole-UI scaling         (Library:SetUIScale / auto fit on phones)
+--  - floating menu button v2  (circular logo button, accent ring, pulse)
 --  - on-screen keyboard avoidance for TextBoxes
---  - keeps every window inside the viewport on screen rotation
+--  - keeps every window inside the viewport on rotation
 --============================================================
 Library.IsMobile = IsMobilePlatform;
 Library._ReduceAnimations = false;
@@ -9777,13 +9819,45 @@ end;
 do
 	local GuiRoot = (gethui and gethui()) or CoreGui;
 
-	-- registry of every ScreenGui created after this point (all user windows)
-	local OrigCreateInstance = Library.CreateInstance;
-	Library._MobileRegistry = {};
+	-----------------------------------------------------
+	-- UI scale system (PC = 1.0, phones auto-fit)
+	-----------------------------------------------------
+	Library._UIScaleValue = 1;
+	Library._UIScaleAuto  = true;
+	Library._UIScaleNodes = {};
 
-	-- [MOBILE PATCH] on-screen keyboard avoidance:
-	-- when a TextBox is focused and would hide behind the keyboard,
-	-- nudge its window up; restore the position on FocusLost.
+	local function ApplyScale(N)
+		MobileUIScaleValue = N; -- [MOBILE PATCH] keep the size clamp in sync
+		for _, Node in ipairs(Library._UIScaleNodes) do
+			if Node and Node.Parent then Node.Scale = N end;
+		end;
+	end;
+
+	local function ComputeAutoScale()
+		if not Library.IsMobile then return 1 end;
+		local Cam = Workspace.CurrentCamera;
+		if not Cam then return 1 end;
+		local Vp = Cam.ViewportSize;
+		-- design baseline ~880x620; shrink proportionally on smaller screens
+		return math.clamp(math.min(Vp.X / 880, Vp.Y / 620), 0.55, 1);
+	end;
+
+	function Library:SetUIScale(N)
+		N = tonumber(N) or 1;
+		Library._UIScaleAuto  = false;
+		Library._UIScaleValue = math.clamp(N, 0.4, 1.5);
+		ApplyScale(Library._UIScaleValue);
+	end;
+
+	function Library:SetAutoUIScale()
+		Library._UIScaleAuto = true;
+		Library._UIScaleValue = ComputeAutoScale();
+		ApplyScale(Library._UIScaleValue);
+	end;
+
+	-----------------------------------------------------
+	-- on-screen keyboard avoidance for TextBoxes
+	-----------------------------------------------------
 	function Library:_BindKeyboardAvoidance(Tb)
 		local SavedPos = nil;
 		Tb.Focused:Connect(function()
@@ -9799,7 +9873,8 @@ do
 				local SafeY = Vp.Y * 0.5; -- mobile keyboard covers the lower half
 				if TbBottom > SafeY then
 					SavedPos = Top.Position;
-					local Dy = TbBottom - SafeY;
+					local S  = Library:_GetUIScaleOf(Top);
+					local Dy = (TbBottom - SafeY) / S;
 					Library:Tween(Top, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 						Position = SavedPos - UDim2.fromOffset(0, Dy);
 					}):Play();
@@ -9818,10 +9893,34 @@ do
 		end);
 	end;
 
+	-----------------------------------------------------
+	-- instance hook: registry + scaling + keyboard avoidance
+	-----------------------------------------------------
+	local OrigCreateInstance = Library.CreateInstance;
+	Library._MobileRegistry = {};
+
+	local function AttachScale(Gui)
+		if Gui.Name == "MobileMenuButton" then return end; -- button keeps native size
+		local Conn;
+		Conn = Gui.ChildAdded:Connect(function(Child)
+			if not Child:IsA("GuiObject") then return end;
+			Conn:Disconnect();
+			local Node = OrigCreateInstance(Library, "UIScale", {
+				Parent = Child;
+				Scale  = Library._UIScaleValue;
+			});
+			table.insert(Library._UIScaleNodes, Node);
+		end);
+		task.delay(3, function()
+			if Conn.Connected then Conn:Disconnect() end;
+		end);
+	end
+
 	Library.CreateInstance = function(Self, ClassName, Props)
 		local Inst = OrigCreateInstance(Self, ClassName, Props);
 		if ClassName == "ScreenGui" then
 			table.insert(Library._MobileRegistry, Inst);
+			AttachScale(Inst);
 		elseif IsMobilePlatform and ClassName == "TextBox" then
 			task.defer(function()
 				if Inst.Parent then Library:_BindKeyboardAvoidance(Inst) end;
@@ -9830,6 +9929,9 @@ do
 		return Inst;
 	end;
 
+	-----------------------------------------------------
+	-- viewport clamp (UIScale-aware)
+	-----------------------------------------------------
 	local function ClampFrameIntoViewport(Frame)
 		if not (Frame and Frame.Parent and Frame:IsA("GuiObject")) then return end;
 		local Parent = Frame.Parent;
@@ -9838,15 +9940,16 @@ do
 		local Ts = Frame.AbsoluteSize;
 		local Ap = Frame.AnchorPoint;
 		if Ps.X <= 0 or Ps.Y <= 0 or Ts.X <= 0 or Ts.Y <= 0 then return end;
+		local S = Library:_GetUIScaleOf(Frame);
 		local Margin = 40;
-		local Tx = Frame.Position.X.Scale * Ps.X + Frame.Position.X.Offset - Ap.X * Ts.X;
-		local Ty = Frame.Position.Y.Scale * Ps.Y + Frame.Position.Y.Offset - Ap.Y * Ts.Y;
+		local Tx = Frame.Position.X.Scale * Ps.X + Frame.Position.X.Offset * S - Ap.X * Ts.X;
+		local Ty = Frame.Position.Y.Scale * Ps.Y + Frame.Position.Y.Offset * S - Ap.Y * Ts.Y;
 		local Nx = math.clamp(Tx, -(Ts.X - Margin), math.max(Ps.X - Margin, 0));
 		local Ny = math.clamp(Ty, 0, math.max(Ps.Y - Margin, 0));
 		if Nx ~= Tx or Ny ~= Ty then
 			Frame.Position = UDim2.new(
-				Frame.Position.X.Scale, Nx + Ap.X * Ts.X - Frame.Position.X.Scale * Ps.X,
-				Frame.Position.Y.Scale, Ny + Ap.Y * Ts.Y - Frame.Position.Y.Scale * Ps.Y
+				Frame.Position.X.Scale, (Nx + Ap.X * Ts.X - Frame.Position.X.Scale * Ps.X) / S,
+				Frame.Position.Y.Scale, (Ny + Ap.Y * Ts.Y - Frame.Position.Y.Scale * Ps.Y) / S
 			);
 		end;
 	end;
@@ -9866,15 +9969,25 @@ do
 	local Cam = Workspace.CurrentCamera;
 	if Cam then
 		Library:Connection(Cam:GetPropertyChangedSignal("ViewportSize"), function()
-			task.defer(ClampAllWindows); -- rotation / resize keeps windows reachable
+			task.defer(function()
+				if Library._UIScaleAuto then
+					Library._UIScaleValue = ComputeAutoScale();
+					ApplyScale(Library._UIScaleValue); -- also syncs MobileUIScaleValue
+				end;
+				ClampAllWindows(); -- rotation / resize keeps windows reachable
+				local Btn = Library.MobileMenuButton; -- [MOBILE PATCH] re-snap the floating button too
+				if Btn then Btn:Snap() end;
+			end);
 		end);
 	end;
 
-	-- floating menu button: opens/closes the menu (replaces the Menu Keybind on mobile)
+	-----------------------------------------------------
+	-- floating menu button v2: circular logo button
+	-----------------------------------------------------
 	local function CreateMobileMenuButton()
 		if Library.MobileMenuButton then return Library.MobileMenuButton end;
 
-		local BtnGui = Library:CreateInstance("ScreenGui", {
+		local BtnGui = OrigCreateInstance(Library, "ScreenGui", {
 			Name           = "MobileMenuButton";
 			Parent         = GuiRoot;
 			IgnoreGuiInset = true;
@@ -9883,31 +9996,65 @@ do
 			ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
 		});
 
-		local Btn = Library:CreateInstance("TextButton", {
+		local Btn = OrigCreateInstance(Library, "TextButton", {
 			Name                   = "Button";
 			Parent                 = BtnGui;
 			AnchorPoint            = Vector2.new(1, 0.5);
-			Position               = UDim2.new(1, -14, 0.55, 0);
-			Size                   = UDim2.fromOffset(46, 46);
-			BackgroundColor3       = Color3.fromHex("1A1A1A");
+			Position               = UDim2.new(1, -12, 0.5, 0);
+			Size                   = UDim2.fromOffset(50, 50);
+			BackgroundColor3       = Color3.fromHex("141414");
+			BackgroundTransparency = 0.08;
 			BorderSizePixel        = 0;
-			Text                   = "Menu";
-			TextColor3             = Color3.fromHex("FFFFFF");
-			TextSize               = 13;
+			Text                   = "";
 			AutoButtonColor        = false;
 			ZIndex                 = 100;
 		});
-		Library:CreateInstance("UICorner", { Parent = Btn; CornerRadius = UDim.new(0, 10) });
-		local Stroke = Library:CreateInstance("UIStroke", {
+		OrigCreateInstance(Library, "UICorner", { Parent = Btn; CornerRadius = UDim.new(1, 0) });
+
+		-- accent ring
+		local Ring = OrigCreateInstance(Library, "UIStroke", {
 			Parent          = Btn;
-			Thickness       = 1.5;
+			Thickness       = 2;
+			Transparency    = 0.15;
 			ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
 		});
-		Library:RegisterAccent(Stroke, "Color");
+		Library:RegisterAccent(Ring, "Color");
+
+		-- soft accent glow behind the circle
+		pcall(function() Library:AddGlowingV2(Btn, Library.Accent, 0.75) end);
+
+		-- logo (falls back to a text glyph if the asset is unavailable)
+		local LogoOk, LogoAsset = pcall(function() return getcustomasset("Hydrogen/logo2.png") end);
+		if LogoOk and LogoAsset and typeof(LogoAsset) == "string" and #LogoAsset > 0 then
+			OrigCreateInstance(Library, "ImageLabel", {
+				Name                 = "Logo";
+				Parent               = Btn;
+				AnchorPoint          = Vector2.new(0.5, 0.5);
+				Position             = UDim2.new(0.5, 0, 0.5, 0);
+				Size                 = UDim2.fromOffset(30, 30);
+				BackgroundTransparency = 1;
+				Image                = LogoAsset;
+				ZIndex               = 101;
+			});
+		else
+			local Glyph = OrigCreateInstance(Library, "TextLabel", {
+				Name                 = "Glyph";
+				Parent               = Btn;
+				AnchorPoint          = Vector2.new(0.5, 0.5);
+				Position             = UDim2.new(0.5, 0, 0.5, 0);
+				Size                 = UDim2.fromOffset(30, 30);
+				BackgroundTransparency = 1;
+				Text                 = "C";
+				TextColor3           = Color3.fromHex("FFFFFF");
+				TextSize             = 20;
+				ZIndex               = 101;
+			});
+			Library:RegisterAccent(Glyph, "TextColor3");
+		end;
 
 		-- scale node for the tap bounce animation
-		local BtnScale = Library:CreateInstance("UIScale", { Parent = Btn; Scale = 1 });
-		local DarkBg   = Color3.fromHex("1A1A1A");
+		local BtnScale = OrigCreateInstance(Library, "UIScale", { Parent = Btn; Scale = 1 });
+		local DarkBg   = Color3.fromHex("141414");
 
 		Library:Draggable(Btn);
 
@@ -9927,6 +10074,22 @@ do
 			}):Play();
 		end;
 
+		-- idle breathing pulse on the accent ring (paused while menu is open / lite mode)
+		task.spawn(function()
+			local T = 0;
+			while Btn.Parent do
+				task.wait(0.04);
+				if Library._ReduceAnimations then continue end;
+				local Win = Library.CurrentlyOpen;
+				if Win and Win.Visible then
+					Ring.Transparency = 0.05;
+					continue;
+				end;
+				T = T + 0.04;
+				Ring.Transparency = 0.3 + math.sin(T * 2.4) * 0.25;
+			end;
+		end);
+
 		-- snap the button to the nearest screen edge after a drag
 		local function SnapToEdge()
 			local Cam2 = Workspace.CurrentCamera;
@@ -9939,7 +10102,7 @@ do
 			local TopLeftX = Btn.Position.X.Offset - W;
 			local TopLeftY = Vp.Y * Btn.Position.Y.Scale + Btn.Position.Y.Offset - H * 0.5;
 			local GoLeft = (TopLeftX + W * 0.5) < Vp.X * 0.5;
-			local NewOffX = GoLeft and (14 + W - Vp.X) or -14;
+			local NewOffX = GoLeft and (12 + W - Vp.X) or -12;
 			local NewTopY = math.clamp(TopLeftY, 8, math.max(Vp.Y - H - 8, 8));
 			local NewOffY = NewTopY + H * 0.5 - Vp.Y * Btn.Position.Y.Scale;
 			Library:Tween(Btn, TweenInfo.new(0.25, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
@@ -9972,7 +10135,7 @@ do
 			end;
 		end);
 
-		local Obj = { Gui = BtnGui, Button = Btn };
+		local Obj = { Gui = BtnGui, Button = Btn, Ring = Ring };
 		function Obj:Show() BtnGui.Enabled = true end;
 		function Obj:Hide() BtnGui.Enabled = false end;
 		function Obj:Snap() SnapToEdge() end;
@@ -9983,7 +10146,9 @@ do
 	Library.CreateMobileMenuButton = CreateMobileMenuButton;
 
 	if IsMobilePlatform then
-		-- mobile defaults: lite animations (no fade tween storm, static accent wave) + faster tweens
+		-- mobile defaults: auto UI scale + lite animations + faster tweens
+		Library._UIScaleValue = ComputeAutoScale();
+		MobileUIScaleValue = Library._UIScaleValue;
 		Library:SetReduceAnimations(true);
 		Library.AnimationSpeed = math.max(tonumber(Library.AnimationSpeed) or 1, 1.5);
 		CreateMobileMenuButton();
