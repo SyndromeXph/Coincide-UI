@@ -1,7 +1,7 @@
 ## Example
 
 ```lua
-local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/ExtroDevGit/Coincide-UI/refs/heads/main/lib.luau"))()
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/SyndromeXph/Coincide-UI/refs/heads/main/lib-test.luau"))()
 
 local Watermark = Library:Watermark({ Text = "Coincide | dev" });
 
