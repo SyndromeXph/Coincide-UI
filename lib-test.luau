@@ -1200,7 +1200,9 @@ local function BuildSection(Host, SecOpts)
 	SecOpts = typeof(SecOpts) == "table" and SecOpts or { Name = tostring(SecOpts) };
 	local SecName = tostring(SecOpts.Name or SecOpts.Title or "section");
 	local Side    = string.lower(tostring(SecOpts.Side or "Left"));
-	local Column  = (Side == "right") and Host.Right or Host.Left;
+	-- [MOBILE PATCH] single-column layout on touch: every section lands in the
+	-- full-width Left column regardless of Side (Right column is hidden)
+	local Column  = (Side == "right" and not IsMobilePlatform) and Host.Right or Host.Left;
 
 	Library:Log("Added section "..SecName)
 
@@ -5310,6 +5312,13 @@ Title.Position = UDim2.new(0, 5 + TitleLogo.AbsoluteSize.X + 4, 0, 9);
 		BindScrollDragGuard(LeftColumn);
 		BindScrollDragGuard(RightColumn);
 
+		-- [MOBILE PATCH] single-column layout on touch: Left spans the full page
+		-- width, Right is hidden (BuildSection routes every section into Left)
+		if IsMobilePlatform then
+			LeftColumn.Size = UDim2.new(1, 0, 1, 2);
+			RightColumn.Visible = false;
+		end;
+
 		local TabRef = {
 			Name        = TabName;
 			Button      = Btn;
@@ -6979,8 +6988,8 @@ function Library:SettingsWindow(Opts)
 		SecMenu:Slider({
 			Name = "UI Scale"; Flag = "MobileUIScale";
 			Min = 50; Max = 200; Step = 5; Decimals = 0; Suffix = "%";
-			Default = math.floor((Library._UIScaleValue or 1) * 100 + 0.5);
-			Tooltip = "Enlarges the whole menu (LinoriaLib SetDPIScale equivalent)";
+			Default = math.clamp(math.floor((Library._UIScaleValue or 1) * 100 + 0.5), 50, 200);
+			Tooltip = "Scales the whole menu (LinoriaLib SetDPIScale equivalent); mobile auto-fits to the screen";
 			Callback = function(V) Library:SetDPIScale(V) end;
 		});
 		SecMenu:Button({
@@ -9976,9 +9985,10 @@ function Library:InvViewer(Opts)
 end;
 
 --============================================================
--- [MOBILE PATCH] Mobile support layer (v4)
+-- [MOBILE PATCH] Mobile support layer (v5)
 --  - PC / mobile auto-detect  (Library.IsMobile)
---  - whole-UI ENLARGEMENT     (Library:SetDPIScale / SetUIScale / auto enlarge on phones)
+--  - fit-to-screen UI scaling (auto; override via SetDPIScale / SetUIScale)
+--  - single-column tab layout on touch
 --  - floating buttons         (LinoriaLib-style "Toggle UI" / "Lock UI" pills)
 --  - ghost-outline touch drag + CanDrag guards (Unnamed-style)
 --  - on-screen keyboard avoidance for TextBoxes
@@ -10013,15 +10023,17 @@ do
 
 	local function ComputeAutoScale()
 		if not Library.IsMobile then return 1 end;
-		-- [MOBILE PATCH] LinoriaLib DPI philosophy on touch: ENLARGE the UI for
-		-- readability and finger-sized targets instead of shrinking it to fit.
-		-- Oversized windows are panned by dragging (the whole window is the
-		-- handle) and can be flattened to MinHeight 200. Tablets (bigger
-		-- viewports) get less boost than phones.
 		local Cam = Workspace.CurrentCamera;
-		if not Cam then return 1.3 end;
-		local Short = math.min(Cam.ViewportSize.X, Cam.ViewportSize.Y);
-		return math.clamp(500 / math.max(Short, 1), 1.05, 1.5);
+		if not Cam then return 1 end;
+		local Vp = Cam.ViewportSize;
+		-- [MOBILE PATCH] fit-to-screen: scale the reference menu (~550x555, rendered
+		-- single-column on touch) so the WHOLE window lands inside the viewport
+		-- with margins. 0.5 floor keeps it legible; tablets stay at 1.0. Users can
+		-- still enlarge via UI Scale / SetDPIScale and pan with drags.
+		local RefW, RefH, Margin = 550, 555, 14;
+		local AvailW = math.max(Vp.X - Margin * 2, 200);
+		local AvailH = math.max(Vp.Y - Margin * 2 - GuiInset, 200);
+		return math.clamp(math.min(AvailW / RefW, AvailH / RefH), 0.5, 1);
 	end;
 
 	function Library:SetUIScale(N)
