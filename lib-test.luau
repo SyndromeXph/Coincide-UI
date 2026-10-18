@@ -695,6 +695,13 @@ function Library:Draggable(TargetFrame, DragHandle, IgnoreLock)
 	local Handle = DragHandle or TargetFrame;
 	local Dragging = false;
 	local DragStart, StartPosition;
+	-- [MOBILE PATCH] render-driven drag state: input events only RECORD the latest
+	-- pointer position; the window position is applied once per rendered frame.
+	-- (InputChanged fires at an irregular rate on touch -> visible stutter; applying
+	-- on RenderStepped is frame-rate smooth everywhere. LinoriaLib does the same
+	-- with a RenderStepped:Wait() drag loop.)
+	local LastInput = nil;
+	local Dirty     = false;
 
 	-- [MOBILE PATCH] ghost-outline touch drag (Unnamed-style): on touch, only a
 	-- transparent accent-stroked outline follows the finger 1:1; the real window
@@ -823,6 +830,7 @@ function Library:Draggable(TargetFrame, DragHandle, IgnoreLock)
 			DestroyGhost();
 			Dragging           = false;
 			Library.IsDragging = false;
+			LastInput, Dirty   = nil, false;
 		end;
 	end);
 
@@ -834,10 +842,17 @@ function Library:Draggable(TargetFrame, DragHandle, IgnoreLock)
 			return;
 		end;
 		if not Dragging then return end;
+		LastInput = Input; -- record only; application happens per render frame
+		Dirty     = true;
+	end);
+
+	self:Connection(RunService.RenderStepped, function()
+		if not Dragging or not Dirty or not LastInput then return end;
+		Dirty = false;
 		if Ghost then
-			SetGhost(Input);
+			SetGhost(LastInput);
 		else
-			Set(Input);
+			Set(LastInput);
 		end;
 	end);
 end;
@@ -905,6 +920,115 @@ function Library:ClampPopupXY(Popup, X, Y)
 	return X, Y;
 end;
 
+-- [MOBILE PATCH] satellite-window tab binding: a satellite window (Preview, Playerlist,
+-- Log, ...) only shows while its main window is open AND the bound tab is active.
+-- External use: Satellite:SyncWithTab(Window, "TabName") — or Opts.BindTab at creation.
+function Library:_MakeSatelliteBindable(Obj)
+	Obj._BoundWindow  = nil;
+	Obj._BoundTab     = nil; -- lowercase needle matched against tab names
+	Obj._SyncedWindow = nil;
+
+	-- does the window's active tab match the bound needle?
+	-- (no matching tab at all / nothing selected yet -> stay visible, never vanish unexpectedly)
+	local function MatchesBoundTab(W, Needle)
+		local Tabs = W and W._Tabs;
+		if not Tabs then return true end;
+		local AnyName, ActiveHit, AnyActive = false, false, false;
+		for _, T in ipairs(Tabs) do
+			if T.Active then AnyActive = true end;
+			if string.find(string.lower(T.Name), Needle, 1, true) then
+				AnyName = true;
+				if T.Active then ActiveHit = true end;
+			end;
+		end;
+		if not AnyName then return true end;
+		if not AnyActive then return true end;
+		return ActiveHit;
+	end;
+
+	function Obj:_RefreshBinding()
+		local W = self._BoundWindow;
+		if not W then return end;
+		local Target = W.Visible == true;
+		if Target and self._BoundTab then
+			Target = MatchesBoundTab(W, self._BoundTab);
+		end;
+		self:SetVisible(Target);
+	end;
+
+	function Obj:SyncWithWindow(Window)
+		self._BoundWindow = Window;
+		if self._SyncedWindow == Window then self:_RefreshBinding(); return end;
+		self._SyncedWindow = Window;
+		local OrigSetVisible = Window.SetVisible;
+		Window.SetVisible = function(Win, State)
+			OrigSetVisible(Win, State);
+			self:_RefreshBinding();
+		end;
+		local OrigToggle = Window.Toggle;
+		Window.Toggle = function(Win)
+			OrigToggle(Win);
+			self:_RefreshBinding();
+		end;
+		task.defer(function() self:_RefreshBinding() end);
+	end;
+
+	function Obj:SyncWithTab(Window, TabName)
+		if not (Window and Window._Tabs) then return end;
+		self._BoundTab = string.lower(tostring(TabName or ""));
+		local function HookTab(T)
+			if T._SatHooked then return end;
+			T._SatHooked = true;
+			local Orig = T.SetActive;
+			T.SetActive = function(Self, State)
+				Orig(Self, State);
+				task.defer(function() Obj:_RefreshBinding() end);
+			end;
+		end;
+		for _, T in ipairs(Window._Tabs) do HookTab(T) end;
+		if not Window._SatTabHook then
+			Window._SatTabHook = true;
+			local OrigTab = Window.Tab;
+			Window.Tab = function(W, ...)
+				local T = OrigTab(W, ...);
+				HookTab(T);
+				return T;
+			end;
+		end;
+		self:SyncWithWindow(Window);
+		self:_RefreshBinding();
+	end;
+end;
+
+-- [MOBILE PATCH] auto-bind a satellite to a tab. Rules:
+--   Opts.BindTab = "Name"  -> bind on ANY platform (explicit external setting)
+--   Opts.BindTab = false   -> never bind
+--   otherwise              -> bind to DefaultTab on touch devices only; PC shows everything
+function Library:_AutoBindSatellite(Obj, Opts, DefaultTab)
+	Opts = typeof(Opts) == "table" and Opts or {};
+	if Opts.BindTab == false then return end;
+	local BindName = nil;
+	if type(Opts.BindTab) == "string" then
+		BindName = Opts.BindTab;
+	elseif IsMobilePlatform then
+		BindName = Opts.Tab or DefaultTab;
+	end;
+	if not BindName then return end;
+	local function TryBind()
+		local Win = Opts.Window or Library.CurrentlyOpen;
+		if Win and Win._Tabs then Obj:SyncWithTab(Win, BindName); return true end;
+		return false;
+	end;
+	if not TryBind() then
+		task.spawn(function() -- window may be created after the satellite: retry briefly
+			for _ = 1, 50 do
+				task.wait(0.1);
+				if TryBind() then return end;
+			end;
+		end);
+	end;
+end;
+
 print("rn7")
 
 
@@ -927,50 +1051,85 @@ function Library:Resizable(TargetFrame, Minimum, Maximum)
 
 	local Resizing  = false;
 	local Start     = UDim2.new();
-	local Delta     = UDim2.new();
 	local ResizeMax = TargetFrame.Parent.AbsoluteSize - TargetFrame.AbsoluteSize;
 
-	-- [MOBILE PATCH] round accent grip dot (LinoriaLib/Unnamed-style affordance)
+	-- [MOBILE PATCH] polished grip dot: quiet idle state with a dark ring for contrast,
+	-- tweened highlight on hover, grows + lights up while grabbed (all tweened, no pops)
+	local DotSize = IsMobilePlatform and 10 or 6;
+	local IdleT, HoverT, DownT = (IsMobilePlatform and 0.55 or 0.65), 0.3, 0.05;
 	local GripDot = self:CreateInstance("Frame", {
 		Parent                 = Grip;
 		AnchorPoint            = Vector2.new(1, 1);
 		Position               = UDim2.new(1, -2, 1, -2);
-		Size                   = IsMobilePlatform and UDim2.fromOffset(10, 10) or UDim2.fromOffset(6, 6);
+		Size                   = UDim2.fromOffset(DotSize, DotSize);
 		BackgroundColor3       = Library.Accent;
-		BackgroundTransparency = 0.5;
+		BackgroundTransparency = IdleT;
 		BorderSizePixel        = 0;
 	});
 	self:CreateInstance("UICorner", { Parent = GripDot; CornerRadius = UDim.new(0.5, 0) });
 	Library:RegisterAccent(GripDot, "BackgroundColor3");
+	local GripRing = self:CreateInstance("UIStroke", {
+		Parent          = GripDot;
+		Color           = Color3.fromHex("000000");
+		Thickness       = 1;
+		Transparency    = 0.55;
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+	});
+
+	local DotInfo = TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
+	local function SetDot(State) -- "idle" | "hover" | "down"
+		local T = (State == "down") and DownT or (State == "hover") and HoverT or IdleT;
+		local Grow = (State == "down") and 2 or 0;
+		Library:Tween(GripDot, DotInfo, {
+			BackgroundTransparency = T;
+			Size = UDim2.fromOffset(DotSize + Grow, DotSize + Grow);
+		}):Play();
+		Library:Tween(GripRing, DotInfo, { Transparency = (State == "down") and 0.15 or 0.55 }):Play();
+	end;
+
+	self:Connection(Grip.MouseEnter, function() if not Resizing then SetDot("hover") end end);
+	self:Connection(Grip.MouseLeave, function() if not Resizing then SetDot("idle") end end);
+
+	-- [MOBILE PATCH] render-driven resize: events record, frames apply (same as dragging)
+	local LastPos, Dirty = nil, false;
 
 	self:Connection(Grip.InputBegan, function(Input)
 		if Library.CantDragForced then return end; -- [MOBILE PATCH] "Lock UI" also freezes resizing
 		if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
 			Resizing = true;
-			GripDot.BackgroundTransparency = 0.1;
+			SetDot("down");
 			local S = Library:_GetUIScaleOf(TargetFrame); -- [MOBILE PATCH]
-			Start    = TargetFrame.Size - UDim2.new(0, Input.Position.X / S, 0, Input.Position.Y / S);
+			Start   = TargetFrame.Size - UDim2.new(0, Input.Position.X / S, 0, Input.Position.Y / S);
+			LastPos = Input.Position;
+			Dirty   = true;
 		end;
 	end);
 
 	self:Connection(Grip.InputEnded, function(Input)
 		if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
 			Resizing = false;
-			GripDot.BackgroundTransparency = 0.5;
+			SetDot("idle");
+			LastPos, Dirty = nil, false;
 		end;
 	end);
 
 	self:Connection(UserInputService.InputChanged, function(Input)
-		if (Input.UserInputType == Enum.UserInputType.MouseMovement or Input.UserInputType == Enum.UserInputType.Touch) and Resizing then -- [MOBILE PATCH] touch resize
-			local S = Library:_GetUIScaleOf(TargetFrame); -- [MOBILE PATCH]
-			ResizeMax = Maximum or (TargetFrame.Parent.AbsoluteSize / S);
-			Delta = Start + UDim2.new(0, Input.Position.X / S, 0, Input.Position.Y / S);
-			Delta = UDim2.new(
-				0, math.clamp(Delta.X.Offset, Minimum.X, ResizeMax.X),
-				0, math.clamp(Delta.Y.Offset, Minimum.Y, ResizeMax.Y)
-			);
-			TargetFrame.Size = Delta; -- [MOBILE PATCH] direct assignment, no tween lag
-		end;
+		if not Resizing then return end;
+		if Input.UserInputType ~= Enum.UserInputType.MouseMovement and Input.UserInputType ~= Enum.UserInputType.Touch then return end;
+		LastPos = Input.Position;
+		Dirty   = true;
+	end);
+
+	self:Connection(RunService.RenderStepped, function()
+		if not Resizing or not Dirty or not LastPos then return end;
+		Dirty = false;
+		local S = Library:_GetUIScaleOf(TargetFrame); -- [MOBILE PATCH]
+		ResizeMax = Maximum or (TargetFrame.Parent.AbsoluteSize / S);
+		local Delta = Start + UDim2.new(0, LastPos.X / S, 0, LastPos.Y / S);
+		TargetFrame.Size = UDim2.new( -- [MOBILE PATCH] direct assignment, no tween lag
+			0, math.clamp(Delta.X.Offset, Minimum.X, ResizeMax.X),
+			0, math.clamp(Delta.Y.Offset, Minimum.Y, ResizeMax.Y)
+		);
 	end);
 
 	return Grip;
@@ -5402,8 +5561,15 @@ RegisterGradLerp(GradEntry)
 		function TabRef:SetActive(State)
 			self.Active = State;
 			if State then
+				local WasHidden = not self.Page.Visible; -- [MOBILE PATCH]
 				self.Page.Visible = true;
 				Library:Tween(self.Page, PageInfo, { GroupTransparency = 0 }):Play();
+				-- [MOBILE PATCH] subtle rise-in: content slides up 6px while fading
+				-- (only on a real tab switch, skipped in lite mode)
+				if WasHidden and not Library._ReduceAnimations then
+					self.Page.Position = UDim2.new(0, 0, 0, 30);
+					Library:Tween(self.Page, PageInfo, { Position = UDim2.new(0, 0, 0, 24) }):Play();
+				end;
 				local Lo = self.IsLeft  and 1 or 0;
 				local Ro = self.IsRight and 1 or 0;
 				Library:Tween(Bg, BgInfo, {
@@ -5554,7 +5720,11 @@ RegisterGradLerp(GradEntry)
 		if Library._ReduceAnimations then Gui.Enabled = self.Visible; AnimScale.Scale = 1; return end; -- [MOBILE PATCH] lite mode: instant toggle, no tween storm
 		self._FadeToken = self._FadeToken + 1;
 		local Mine = self._FadeToken;
-		local Info = TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
+		-- [MOBILE PATCH] tuned open/close: soft Quint-out settle when opening,
+		-- quick Quad-in exit when closing (open feels gentle, close feels snappy)
+		local Info = self.Visible
+			and TweenInfo.new(0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+			or  TweenInfo.new(0.15, Enum.EasingStyle.Quad,  Enum.EasingDirection.In);
 		if not self.Visible and self._FadeOriginals
 			and os.clock() - (self._ShownAt or 0) < Info.Time then
 			for Inst, PMap in self._FadeOriginals do
@@ -5570,8 +5740,8 @@ RegisterGradLerp(GradEntry)
 			self._ShownAt = os.clock();
 			Gui.Enabled = true;
 			-- [MOBILE PATCH] subtle zoom-in on top of the fade (Quint Out = snappy settle)
-			AnimScale.Scale = 0.97;
-			Library:Tween(AnimScale, TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+			AnimScale.Scale = 0.965;
+			Library:Tween(AnimScale, TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
 				Scale = 1;
 			}):Play();
 			for Inst, PMap in self._FadeOriginals do
@@ -5583,8 +5753,8 @@ RegisterGradLerp(GradEntry)
 			end;
 		else
 			-- [MOBILE PATCH] matching zoom-out while fading
-			Library:Tween(AnimScale, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
-				Scale = 0.97;
+			Library:Tween(AnimScale, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+				Scale = 0.965;
 			}):Play();
 			for Inst, PMap in self._FadeOriginals do
 				if Inst.Parent then
@@ -6118,6 +6288,15 @@ function Library:Playerlist(Opts)
 	local Width = tonumber(Opts.Width) or 240;
 	local Height = tonumber(Opts.Height) or 400;
 	Width, Height = ClampWindowSize(Width, Height); -- [MOBILE PATCH]
+	-- [MOBILE PATCH] touch devices: compact, fully on-screen, docked top-right (draggable)
+	local MobilePos = nil;
+	if IsMobilePlatform then
+		local Cam = workspace.CurrentCamera;
+		local Vp  = (Cam and Cam.ViewportSize) or Vector2.new(800, 600);
+		Width  = math.min(Width,  math.max(math.floor(Vp.X) - 24, 160));
+		Height = math.min(Height, math.max(math.floor(Vp.Y) - 90, 160));
+		MobilePos = UDim2.new(1, -8, 0, 38); -- AnchorPoint (1,0): dock top-right
+	end;
 
 	local Gui = self:CreateInstance("ScreenGui", {
 		Name           = "PlayerlistGui";
@@ -6131,7 +6310,7 @@ function Library:Playerlist(Opts)
 		Name             = "Outer";
 		Parent           = Gui;
 		AnchorPoint      = Vector2.new(1, 0);
-		Position         = UDim2.fromOffset(0, 0);
+		Position         = MobilePos or UDim2.fromOffset(0, 0); -- [MOBILE PATCH]
 		Size             = UDim2.fromOffset(Width, Height);
 		BackgroundColor3 = Color3.fromHex("FFFFFF");
 		BorderSizePixel  = 0;
@@ -6615,18 +6794,8 @@ function Library:Playerlist(Opts)
 		end;
 	end;
 
-	function Obj:SyncWithWindow(Window)
-		local OrigSetVisible = Window.SetVisible;
-		Window.SetVisible = function(Win, State)
-			OrigSetVisible(Win, State);
-			self:SetVisible(State);
-		end;
-		local OrigToggle = Window.Toggle;
-		Window.Toggle = function(Win)
-			OrigToggle(Win);
-			self:SetVisible(Win.Visible);
-		end;
-	end;
+	-- [MOBILE PATCH] tab-bound visibility: SyncWithWindow / SyncWithTab / _RefreshBinding
+	Library:_MakeSatelliteBindable(Obj);
 
 	function Obj:PositionNextTo(Window)
 		local WinOuter = Window.Outer;
@@ -6660,6 +6829,9 @@ function Library:Playerlist(Opts)
 
 	function Obj:Refresh() RefreshPlayerList() end;
 	function Obj:Destroy() Gui:Destroy() end;
+	-- [MOBILE PATCH] mobile default: only show while the "Player" tab is open.
+	-- PC keeps it always visible; BindTab = "Name" binds on any platform, false disables.
+	Library:_AutoBindSatellite(Obj, Opts, "Player");
 	Library._Playerlist = Obj;
 	return Obj;
 end;
@@ -8053,12 +8225,6 @@ function Library:PreviewWindow(Opts)
 
 	local Obj = { Gui = Gui, Outer = Outer, Preview = Core, _Visible = true };
 
-	-- [MOBILE PATCH] tab-bound visibility state: the preview should only exist while the
-	-- menu is open AND the bound tab (default "Visual") is the active one
-	Obj._BoundWindow  = nil;
-	Obj._BoundTab     = nil; -- lowercase needle matched against tab names
-	Obj._SyncedWindow = nil;
-
 	function Obj:SetVisible(State)
 		if self._Visible == State then return end;
 		self._Visible = State;
@@ -8100,79 +8266,8 @@ function Library:PreviewWindow(Opts)
 		end;
 	end;
 
-	-- [MOBILE PATCH] does the window's active tab match the bound needle?
-	-- (if no tab name matches at all, or nothing is selected yet, stay visible —
-	--  never let the preview vanish unexpectedly)
-	local function MatchesBoundTab(W, Needle)
-		local Tabs = W and W._Tabs;
-		if not Tabs then return true end;
-		local AnyName, ActiveHit, AnyActive = false, false, false;
-		for _, T in ipairs(Tabs) do
-			if T.Active then AnyActive = true end;
-			if string.find(string.lower(T.Name), Needle, 1, true) then
-				AnyName = true;
-				if T.Active then ActiveHit = true end;
-			end;
-		end;
-		if not AnyName then return true end;
-		if not AnyActive then return true end;
-		return ActiveHit;
-	end;
-
-	function Obj:_RefreshBinding()
-		local W = self._BoundWindow;
-		if not W then return end;
-		local Target = W.Visible == true;
-		if Target and self._BoundTab then
-			Target = MatchesBoundTab(W, self._BoundTab);
-		end;
-		self:SetVisible(Target);
-	end;
-
-	function Obj:SyncWithWindow(Window)
-		self._BoundWindow = Window; -- [MOBILE PATCH] remember for tab-bound refresh
-		if self._SyncedWindow == Window then self:_RefreshBinding(); return end;
-		self._SyncedWindow = Window;
-		local OrigSetVisible = Window.SetVisible;
-		Window.SetVisible = function(Win, State)
-			OrigSetVisible(Win, State);
-			self:_RefreshBinding();
-		end;
-		local OrigToggle = Window.Toggle;
-		Window.Toggle = function(Win)
-			OrigToggle(Win);
-			self:_RefreshBinding();
-		end;
-		task.defer(function() self:_RefreshBinding() end);
-	end;
-
-	-- [MOBILE PATCH] bind the preview's visibility to a tab: it only shows while
-	-- Window is open and that tab is active (hooks existing and future tabs)
-	function Obj:SyncWithTab(Window, TabName)
-		if not (Window and Window._Tabs) then return end;
-		self._BoundTab = string.lower(tostring(TabName or "Visual"));
-		local function HookTab(T)
-			if T._PreviewHooked then return end;
-			T._PreviewHooked = true;
-			local Orig = T.SetActive;
-			T.SetActive = function(Self, State)
-				Orig(Self, State);
-				task.defer(function() Obj:_RefreshBinding() end);
-			end;
-		end;
-		for _, T in ipairs(Window._Tabs) do HookTab(T) end;
-		if not Window._PreviewTabHook then
-			Window._PreviewTabHook = true;
-			local OrigTab = Window.Tab;
-			Window.Tab = function(W, ...)
-				local T = OrigTab(W, ...);
-				HookTab(T);
-				return T;
-			end;
-		end;
-		self:SyncWithWindow(Window);
-		self:_RefreshBinding();
-	end;
+	-- [MOBILE PATCH] tab-bound visibility: SyncWithWindow / SyncWithTab / _RefreshBinding
+	Library:_MakeSatelliteBindable(Obj);
 
 	function Obj:PositionNextTo(Window)
 		local WinOuter = Window.Outer;
@@ -8188,24 +8283,9 @@ function Library:PreviewWindow(Opts)
 		WinOuter:GetPropertyChangedSignal("AbsoluteSize"):Connect(UpdatePos);
 	end;
 
-	-- [MOBILE PATCH] default: only show while the "Visual" tab is open.
-	-- Override with BindTab = "TabName"; BindTab = false keeps legacy always-visible.
-	if Opts.BindTab ~= false then
-		local BindName = Opts.BindTab or Opts.Tab or "Visual";
-		local function TryBind()
-			local Win = Opts.Window or Library.CurrentlyOpen;
-			if Win and Win._Tabs then Obj:SyncWithTab(Win, BindName); return true end;
-			return false;
-		end;
-		if not TryBind() then
-			task.spawn(function() -- window may be created after the preview: retry briefly
-				for _ = 1, 50 do
-					task.wait(0.1);
-					if TryBind() then return end;
-				end;
-			end);
-		end;
-	end;
+	-- [MOBILE PATCH] mobile default: only show while the "Visual" tab is open.
+	-- PC keeps it always visible; BindTab = "Name" binds on any platform, false disables.
+	Library:_AutoBindSatellite(Obj, Opts, "Visual");
 
 	function Obj:Get(...) return Core:Get(...) end;
 	function Obj:Set(...) return Core:Set(...) end;
@@ -8553,18 +8633,9 @@ function Library:LogWindow(Opts)
 		end;
 	end;
 
-	function Obj:SyncWithWindow(Window)
-		local OrigSetVisible = Window.SetVisible;
-		Window.SetVisible = function(Win, State)
-			OrigSetVisible(Win, State);
-			self:SetVisible(State);
-		end;
-		local OrigToggle = Window.Toggle;
-		Window.Toggle = function(Win)
-			OrigToggle(Win);
-			self:SetVisible(Win.Visible);
-		end;
-	end;
+	-- [MOBILE PATCH] tab-bound visibility available externally: Log:SyncWithTab(Window, "Name")
+	-- or LogWindow({ BindTab = "Name" }); no default binding for the log window
+	Library:_MakeSatelliteBindable(Obj);
 
 	function Obj:PositionBelow(OtherObj)
 		local OtherOuter = OtherObj.Outer;
@@ -8583,6 +8654,7 @@ function Library:LogWindow(Opts)
 
 	function Obj:Log(Level, Message) AddLog(Level, Message) end;
 	function Obj:Destroy() Gui:Destroy() end;
+	Library:_AutoBindSatellite(Obj, Opts, nil); -- [MOBILE PATCH] external BindTab only
 	Library._LogWindow = Obj;
 	return Obj;
 end;
