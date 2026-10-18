@@ -714,6 +714,31 @@ function Library:Draggable(TargetFrame, DragHandle, IgnoreLock)
 		Ghost, GhostStart = nil, nil;
 	end;
 
+	-- [MOBILE PATCH] UIShadow blur re-renders every frame while the window moves/resizes
+	-- -> visible stutter. Park all descendant shadows during the drag, restore on release.
+	local ShadowCache = nil;
+	local function SetShadows(Enabled)
+		if not ShadowCache then
+			ShadowCache = {};
+			for _, D in TargetFrame:GetDescendants() do
+				if D.ClassName == "UIShadow" then table.insert(ShadowCache, D) end;
+			end;
+		end;
+		for _, Sh in ShadowCache do
+			local Ok = pcall(function() Sh.Enabled = Enabled end);
+			if not Ok then -- fallback for clients without UIShadow.Enabled: swap transparency
+				pcall(function()
+					if Enabled then
+						Sh.Transparency = Sh:GetAttribute("CoincideShadowT") or 0.5;
+					else
+						Sh:SetAttribute("CoincideShadowT", Sh.Transparency);
+						Sh.Transparency = 1;
+					end;
+				end);
+			end;
+		end;
+	end;
+
 	local function Set(Input)
 		if not DragStart or not StartPosition then return end;
 		local S = Library:_GetUIScaleOf(TargetFrame); -- [MOBILE PATCH] screen px -> offset units
@@ -810,6 +835,7 @@ function Library:Draggable(TargetFrame, DragHandle, IgnoreLock)
 		Library.IsDragging = true;
 		DragStart          = Input.Position;
 		StartPosition      = TargetFrame.Position;
+		SetShadows(false); -- [MOBILE PATCH] park blur shadows while moving (stutter fix)
 		if Input.UserInputType == Enum.UserInputType.Touch and not IgnoreLock then
 			SpawnGhost(); -- touch: drag the ghost, snap the window on release
 		end;
@@ -828,6 +854,7 @@ function Library:Draggable(TargetFrame, DragHandle, IgnoreLock)
 				);
 			end;
 			DestroyGhost();
+			SetShadows(true); -- [MOBILE PATCH] restore shadows after the move
 			Dragging           = false;
 			Library.IsDragging = false;
 			LastInput, Dirty   = nil, false;
@@ -848,6 +875,17 @@ function Library:Draggable(TargetFrame, DragHandle, IgnoreLock)
 
 	self:Connection(RunService.RenderStepped, function()
 		if not Dragging or not Dirty or not LastInput then return end;
+		-- [MOBILE PATCH] a scroll/dropdown guard tripped MID-DRAG: cancel the drag and
+		-- let content scrolling win (no snap) — this was the touch stutter: the window
+		-- and the scrolling column were fighting over the same finger
+		if not IgnoreLock and Library.CanDrag == false then
+			DestroyGhost();
+			SetShadows(true);
+			Dragging           = false;
+			Library.IsDragging = false;
+			LastInput, Dirty   = nil, false;
+			return;
+		end;
 		Dirty = false;
 		if Ghost then
 			SetGhost(LastInput);
@@ -1029,9 +1067,133 @@ function Library:_AutoBindSatellite(Obj, Opts, DefaultTab)
 	end;
 end;
 
+-- [MOBILE PATCH] custom slim scrollbar: the native Roblox bar is chunky and unthemable.
+-- This replaces it with a thin accent capsule that fades in while scrolling and fades
+-- back to a whisper when idle, auto-hides when the content fits, and is draggable.
+-- Layout note: the track is a STATIC SIBLING overlay glued to the scroll frame's right
+-- edge (never scrolls, never disturbs UIListLayout, never feeds AutomaticCanvasSize);
+-- height follows AbsoluteWindowSize so it survives window resizes and AutomaticSize.
+function Library:_AttachScrollbar(Scroll)
+	if not (Scroll and Scroll:IsA("ScrollingFrame")) then return end;
+	if Scroll:GetAttribute("CoincideScroll") then return end;
+	local Holder = Scroll.Parent;
+	if not (Holder and Holder:IsA("GuiObject")) then return end;
+	Scroll:SetAttribute("CoincideScroll", true);
+	Scroll.ScrollBarThickness = 0; -- native bar fully hidden, overlay takes over
+
+	local BarW = IsMobilePlatform and 5 or 4;
+	local Ax, Ay = Scroll.AnchorPoint.X, Scroll.AnchorPoint.Y;
+
+	local Track = Library:CreateInstance("Frame", {
+		Name                   = "ScrollTrack";
+		Parent                 = Holder;
+		AnchorPoint            = Vector2.new(1, 0);
+		Position               = UDim2.new(
+			Scroll.Position.X.Scale + (1 - Ax) * Scroll.Size.X.Scale,
+			Scroll.Position.X.Offset + (1 - Ax) * Scroll.Size.X.Offset - 1,
+			Scroll.Position.Y.Scale - Ay * Scroll.Size.Y.Scale,
+			Scroll.Position.Y.Offset - Ay * Scroll.Size.Y.Offset + 2
+		);
+		Size                   = UDim2.new(0, BarW, 0, 10); -- height synced in Update()
+		BackgroundTransparency = 1;
+		BorderSizePixel        = 0;
+		Visible                = false;
+		ZIndex                 = 100;
+	});
+
+	local Handle = Library:CreateInstance("TextButton", {
+		Name                   = "Handle";
+		Parent                 = Track;
+		Size                   = UDim2.new(1, 0, 0.2, 0);
+		BackgroundColor3       = Library.Accent;
+		BackgroundTransparency = 0.55;
+		BorderSizePixel        = 0;
+		AutoButtonColor        = false;
+		Text                   = "";
+		ZIndex                 = 101;
+	});
+	Library:CreateInstance("UICorner", { Parent = Handle; CornerRadius = UDim.new(0.5, 0) });
+	Library:RegisterAccent(Handle, "BackgroundColor3");
+
+	local IdleT, ActiveT = 0.55, 0.12;
+	local FlashInfo = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
+	local FlashToken = 0;
+	local DraggingBar = false;
+
+	local function Flash()
+		FlashToken += 1;
+		local Mine = FlashToken;
+		Library:Tween(Handle, FlashInfo, { BackgroundTransparency = ActiveT }):Play();
+		task.delay(0.8, function()
+			if Mine == FlashToken and not DraggingBar and Track.Parent then
+				Library:Tween(Handle, FlashInfo, { BackgroundTransparency = IdleT }):Play();
+			end;
+		end);
+	end;
+
+	local function Update(FlashIt)
+		if not (Scroll.Parent and Track.Parent) then return end;
+		local Cs = Scroll.AbsoluteCanvasSize.Y;
+		local Ws = Scroll.AbsoluteWindowSize.Y;
+		if not Cs or not Ws or Ws <= 0 or Cs <= Ws + 2 then
+			Track.Visible = false;
+			return;
+		end;
+		Track.Visible = true;
+		Track.Size = UDim2.new(0, BarW, 0, math.max(Ws - 4, 10));
+		local Frac   = math.clamp(Ws / Cs, 0.06, 1);
+		local MaxPos = Cs - Ws;
+		local P      = (MaxPos > 0) and math.clamp(Scroll.CanvasPosition.Y / MaxPos, 0, 1) or 0;
+		Handle.Size     = UDim2.new(1, 0, Frac, 0);
+		Handle.Position = UDim2.new(0, 0, P * (1 - Frac), 0);
+		if FlashIt then Flash() end;
+	end;
+
+	Library:Connection(Scroll:GetPropertyChangedSignal("CanvasPosition"), function() Update(true) end);
+	Library:Connection(Scroll:GetPropertyChangedSignal("AbsoluteCanvasSize"), function() Update(false) end);
+	Library:Connection(Scroll:GetPropertyChangedSignal("AbsoluteSize"), function() Update(false) end);
+	task.defer(Update, false);
+
+	-- draggable handle (screen-px math; UI scale cancels out)
+	local DragStartY, StartCanvas;
+	Library:Connection(Handle.InputBegan, function(Input)
+		if Input.UserInputType == Enum.UserInputType.MouseButton1
+			or Input.UserInputType == Enum.UserInputType.Touch then
+			DraggingBar = true;
+			Library.CanDrag = false; -- the window must not grab this gesture
+			DragStartY  = Input.Position.Y;
+			StartCanvas = Scroll.CanvasPosition.Y;
+			Flash();
+		end;
+	end);
+	Library:Connection(Handle.InputEnded, function(Input)
+		if Input.UserInputType == Enum.UserInputType.MouseButton1
+			or Input.UserInputType == Enum.UserInputType.Touch then
+			DraggingBar = false;
+			Library.CanDrag = true;
+			Flash();
+		end;
+	end);
+	Library:Connection(UserInputService.InputChanged, function(Input)
+		if not DraggingBar then return end;
+		if Input.UserInputType ~= Enum.UserInputType.MouseMovement
+			and Input.UserInputType ~= Enum.UserInputType.Touch then return end;
+		local Cs = Scroll.AbsoluteCanvasSize.Y;
+		local Ws = Scroll.AbsoluteWindowSize.Y;
+		local MaxPos = Cs - Ws;
+		if MaxPos <= 0 then return end;
+		local Frac   = math.clamp(Ws / Cs, 0.06, 1);
+		local RelMax = Track.AbsoluteSize.Y * (1 - Frac);
+		if RelMax <= 0 then return end;
+		local DFrac = (Input.Position.Y - DragStartY) / RelMax;
+		Scroll.CanvasPosition = Vector2.new(
+			Scroll.CanvasPosition.X,
+			math.clamp(StartCanvas + DFrac * MaxPos, 0, MaxPos)
+		);
+	end);
+end;
+
 print("rn7")
-
-
 function Library:Resizable(TargetFrame, Minimum, Maximum)
 	Minimum = Minimum or Vector2.new(TargetFrame.Size.X.Offset, TargetFrame.Size.Y.Offset);
 
@@ -1093,11 +1255,36 @@ function Library:Resizable(TargetFrame, Minimum, Maximum)
 	-- [MOBILE PATCH] render-driven resize: events record, frames apply (same as dragging)
 	local LastPos, Dirty = nil, false;
 
+	-- [MOBILE PATCH] park UIShadow blur during resize too (re-renders per size change)
+	local ShadowCache = nil;
+	local function SetShadows(Enabled)
+		if not ShadowCache then
+			ShadowCache = {};
+			for _, D in TargetFrame:GetDescendants() do
+				if D.ClassName == "UIShadow" then table.insert(ShadowCache, D) end;
+			end;
+		end;
+		for _, Sh in ShadowCache do
+			local Ok = pcall(function() Sh.Enabled = Enabled end);
+			if not Ok then
+				pcall(function()
+					if Enabled then
+						Sh.Transparency = Sh:GetAttribute("CoincideShadowT") or 0.5;
+					else
+						Sh:SetAttribute("CoincideShadowT", Sh.Transparency);
+						Sh.Transparency = 1;
+					end;
+				end);
+			end;
+		end;
+	end;
+
 	self:Connection(Grip.InputBegan, function(Input)
 		if Library.CantDragForced then return end; -- [MOBILE PATCH] "Lock UI" also freezes resizing
 		if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
 			Resizing = true;
 			SetDot("down");
+			SetShadows(false);
 			local S = Library:_GetUIScaleOf(TargetFrame); -- [MOBILE PATCH]
 			Start   = TargetFrame.Size - UDim2.new(0, Input.Position.X / S, 0, Input.Position.Y / S);
 			LastPos = Input.Position;
@@ -1109,6 +1296,7 @@ function Library:Resizable(TargetFrame, Minimum, Maximum)
 		if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
 			Resizing = false;
 			SetDot("idle");
+			SetShadows(true);
 			LastPos, Dirty = nil, false;
 		end;
 	end);
@@ -1150,12 +1338,14 @@ function Library:AddGlowing(frame,color,transparency)
 end
 
 function Library:AddGlowingV2(frame,color,transparency)
-	local glow = Library:CreateInstance("UIShadow");
-	glow.BlurRadius = UDim.new(0, 10);
-	glow.Color = color;
-	glow.Transparency = transparency;
-	glow.Parent = frame;
-	glow.Enabled = true;
+	pcall(function() -- [MOBILE PATCH] UIShadow unsupported on some clients -> safe no-op
+		local glow = Library:CreateInstance("UIShadow");
+		glow.BlurRadius = UDim.new(0, 10);
+		glow.Color = color;
+		glow.Transparency = transparency;
+		glow.Parent = frame;
+		glow.Enabled = true;
+	end);
 end
 
 
@@ -5007,6 +5197,7 @@ end;
 			ClipsDescendants       = true;
 		});
 		Library:RegisterAccent(Scroller, "ScrollBarImageColor3");
+		Library:_AttachScrollbar(Scroller); -- [MOBILE PATCH] slim custom scrollbar
 		Library:CreateInstance("UIListLayout", {
 			Parent        = Scroller;
 			FillDirection = Enum.FillDirection.Vertical;
@@ -5419,7 +5610,7 @@ Title.Position = UDim2.new(0, 5 + TitleLogo.AbsoluteSize.X + 4, 0, 9);
 			BorderSizePixel        = 0;
 			CanvasSize             = UDim2.new(0, 0, 0, 0);
 			AutomaticCanvasSize    = Enum.AutomaticSize.Y;
-			ScrollBarThickness     = IsMobilePlatform and 12 or 0; -- [MOBILE PATCH] fat grabbable scrollbar on touch (Unnamed-style)
+			ScrollBarThickness     = 0; -- [MOBILE PATCH] native hidden; slim custom scrollbar attached below
 			ScrollingDirection     = Enum.ScrollingDirection.Y;
 			ClipsDescendants       = true;
 		});
@@ -5446,7 +5637,7 @@ Title.Position = UDim2.new(0, 5 + TitleLogo.AbsoluteSize.X + 4, 0, 9);
 			BorderSizePixel        = 0;
 			CanvasSize             = UDim2.new(0, 0, 0, 0);
 			AutomaticCanvasSize    = Enum.AutomaticSize.Y;
-			ScrollBarThickness     = IsMobilePlatform and 12 or 0; -- [MOBILE PATCH] fat grabbable scrollbar on touch (Unnamed-style)
+			ScrollBarThickness     = 0; -- [MOBILE PATCH] native hidden; slim custom scrollbar attached below
 			ScrollingDirection     = Enum.ScrollingDirection.Y;
 			ClipsDescendants       = true;
 		});
@@ -5479,6 +5670,9 @@ Title.Position = UDim2.new(0, 5 + TitleLogo.AbsoluteSize.X + 4, 0, 9);
 		end;
 		BindScrollDragGuard(LeftColumn);
 		BindScrollDragGuard(RightColumn);
+		-- [MOBILE PATCH] slim accent scrollbars (fade-in on scroll, draggable capsule)
+		Library:_AttachScrollbar(LeftColumn);
+		Library:_AttachScrollbar(RightColumn);
 
 		local TabRef = {
 			Name        = TabName;
@@ -5504,8 +5698,9 @@ Title.Position = UDim2.new(0, 5 + TitleLogo.AbsoluteSize.X + 4, 0, 9);
 			IsRight     = false;
 		};
 
-		local PageInfo = TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
-		local BgInfo   = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
+		-- [MOBILE PATCH] smoother tab transitions: a touch longer with a Quint-out settle
+		local PageInfo = TweenInfo.new(0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
+		local BgInfo   = TweenInfo.new(0.2,  Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
 		local InactiveA, InactiveB = Color3.fromHex("1F1F1F"), Color3.fromHex("181818");
 		local ActiveA,   ActiveB   = Color3.fromHex("161616"), Color3.fromHex("151515");
 		local GradT      = TabRef.Active and 1 or 0;
@@ -5564,10 +5759,10 @@ RegisterGradLerp(GradEntry)
 				local WasHidden = not self.Page.Visible; -- [MOBILE PATCH]
 				self.Page.Visible = true;
 				Library:Tween(self.Page, PageInfo, { GroupTransparency = 0 }):Play();
-				-- [MOBILE PATCH] subtle rise-in: content slides up 6px while fading
-				-- (only on a real tab switch, skipped in lite mode)
-				if WasHidden and not Library._ReduceAnimations then
-					self.Page.Position = UDim2.new(0, 0, 0, 30);
+				-- [MOBILE PATCH] rise-in: content slides up 8px while fading in
+				-- (only on a real tab switch; cheap — two tweens on one CanvasGroup)
+				if WasHidden then
+					self.Page.Position = UDim2.new(0, 0, 0, 32);
 					Library:Tween(self.Page, PageInfo, { Position = UDim2.new(0, 0, 0, 24) }):Play();
 				end;
 				local Lo = self.IsLeft  and 1 or 0;
@@ -5584,8 +5779,10 @@ RegisterGradLerp(GradEntry)
 			else
 				local P = self.Page;
 				Library:Tween(P, PageInfo, { GroupTransparency = 1 }):Play();
+				-- [MOBILE PATCH] matching slide-down while the page fades out
+				Library:Tween(P, PageInfo, { Position = UDim2.new(0, 0, 0, 32) }):Play();
 				task.delay(PageInfo.Time, function()
-					if not self.Active then P.Visible = false end;
+					if not self.Active then P.Visible = false; P.Position = UDim2.new(0, 0, 0, 24) end;
 				end);
 				Library:Tween(Bg, BgInfo, {
 					Position = UDim2.new(0, 0, 0, 0);
@@ -5721,10 +5918,10 @@ RegisterGradLerp(GradEntry)
 		self._FadeToken = self._FadeToken + 1;
 		local Mine = self._FadeToken;
 		-- [MOBILE PATCH] tuned open/close: soft Quint-out settle when opening,
-		-- quick Quad-in exit when closing (open feels gentle, close feels snappy)
+		-- Sine-out fade when closing (fast start, gentle end — no abrupt pop)
 		local Info = self.Visible
 			and TweenInfo.new(0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-			or  TweenInfo.new(0.15, Enum.EasingStyle.Quad,  Enum.EasingDirection.In);
+			or  TweenInfo.new(0.18, Enum.EasingStyle.Sine,  Enum.EasingDirection.Out);
 		if not self.Visible and self._FadeOriginals
 			and os.clock() - (self._ShownAt or 0) < Info.Time then
 			for Inst, PMap in self._FadeOriginals do
@@ -5753,7 +5950,7 @@ RegisterGradLerp(GradEntry)
 			end;
 		else
 			-- [MOBILE PATCH] matching zoom-out while fading
-			Library:Tween(AnimScale, TweenInfo.new(0.14, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+			Library:Tween(AnimScale, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
 				Scale = 0.965;
 			}):Play();
 			for Inst, PMap in self._FadeOriginals do
@@ -6469,6 +6666,7 @@ function Library:Playerlist(Opts)
 		ClipsDescendants     = true;
 	});
 	Library:RegisterAccent(PlayerListScroll, "ScrollBarImageColor3");
+	Library:_AttachScrollbar(PlayerListScroll); -- [MOBILE PATCH] slim custom scrollbar
 	self:CreateInstance("UIListLayout", {
 		Parent        = PlayerListScroll;
 		FillDirection = Enum.FillDirection.Vertical;
@@ -6775,17 +6973,19 @@ function Library:Playerlist(Opts)
 			Gui.Enabled = true;
 			for Inst, PMap in FadeOriginals do
 				if Inst and Inst.Parent then
-					local Goal = {};
-					for P, V in PMap do Goal[P] = V end;
-					Library:Tween(Inst, Info, Goal):Play();
+					-- [MOBILE PATCH] tween-storm cut: skip already-invisible instances
+					local Goal = nil;
+					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = V end; end;
+					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
 				end;
 			end;
 		else
 			for Inst, PMap in FadeOriginals do
 				if Inst and Inst.Parent then
-					local Goal = {};
-					for P in PMap do Goal[P] = 1 end;
-					Library:Tween(Inst, Info, Goal):Play();
+					-- [MOBILE PATCH] tween-storm cut: only fade what's visible
+					local Goal = nil;
+					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = 1 end; end;
+					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
 				end;
 			end;
 			task.delay(Info.Time + 0.05, function()
@@ -6829,9 +7029,9 @@ function Library:Playerlist(Opts)
 
 	function Obj:Refresh() RefreshPlayerList() end;
 	function Obj:Destroy() Gui:Destroy() end;
-	-- [MOBILE PATCH] mobile default: only show while the "Player" tab is open.
+	-- [MOBILE PATCH] mobile default: only show while the "Players" tab is open.
 	-- PC keeps it always visible; BindTab = "Name" binds on any platform, false disables.
-	Library:_AutoBindSatellite(Obj, Opts, "Player");
+	Library:_AutoBindSatellite(Obj, Opts, "Players");
 	Library._Playerlist = Obj;
 	return Obj;
 end;
@@ -7334,6 +7534,7 @@ function Library:SettingsWindow(Opts)
 		ClipsDescendants       = true;
 	});
 	Library:RegisterAccent(Column, "ScrollBarImageColor3");
+	Library:_AttachScrollbar(Column); -- [MOBILE PATCH] slim custom scrollbar
 	self:CreateInstance("UIListLayout", {
 		Parent        = Column;
 		FillDirection = Enum.FillDirection.Vertical;
@@ -7413,17 +7614,19 @@ function Library:SettingsWindow(Opts)
 			Gui.Enabled = true;
 			for Inst, PMap in FadeOriginals do
 				if Inst and Inst.Parent then
-					local Goal = {};
-					for P, V in PMap do Goal[P] = V end;
-					Library:Tween(Inst, Info, Goal):Play();
+					-- [MOBILE PATCH] tween-storm cut: skip already-invisible instances
+					local Goal = nil;
+					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = V end; end;
+					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
 				end;
 			end;
 		else
 			for Inst, PMap in FadeOriginals do
 				if Inst and Inst.Parent then
-					local Goal = {};
-					for P in PMap do Goal[P] = 1 end;
-					Library:Tween(Inst, Info, Goal):Play();
+					-- [MOBILE PATCH] tween-storm cut: only fade what's visible
+					local Goal = nil;
+					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = 1 end; end;
+					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
 				end;
 			end;
 			task.delay(Info.Time + 0.05, function()
@@ -8247,17 +8450,19 @@ function Library:PreviewWindow(Opts)
 			Gui.Enabled = true;
 			for Inst, PMap in FadeOriginals do
 				if Inst and Inst.Parent then
-					local Goal = {};
-					for P, V in PMap do Goal[P] = V end;
-					Library:Tween(Inst, Info, Goal):Play();
+					-- [MOBILE PATCH] tween-storm cut: skip already-invisible instances
+					local Goal = nil;
+					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = V end; end;
+					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
 				end;
 			end;
 		else
 			for Inst, PMap in FadeOriginals do
 				if Inst and Inst.Parent then
-					local Goal = {};
-					for P in PMap do Goal[P] = 1 end;
-					Library:Tween(Inst, Info, Goal):Play();
+					-- [MOBILE PATCH] tween-storm cut: only fade what's visible
+					local Goal = nil;
+					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = 1 end; end;
+					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
 				end;
 			end;
 			task.delay(Info.Time + 0.05, function()
@@ -8442,6 +8647,7 @@ function Library:LogWindow(Opts)
 		ClipsDescendants     = true;
 	});
 	Library:RegisterAccent(LogScroll, "ScrollBarImageColor3");
+	Library:_AttachScrollbar(LogScroll); -- [MOBILE PATCH] slim custom scrollbar
 	self:CreateInstance("UIListLayout", {
 		Parent        = LogScroll;
 		FillDirection = Enum.FillDirection.Vertical;
@@ -8614,17 +8820,19 @@ function Library:LogWindow(Opts)
 			Gui.Enabled = true;
 			for Inst, PMap in FadeOriginals do
 				if Inst and Inst.Parent then
-					local Goal = {};
-					for P, V in PMap do Goal[P] = V end;
-					Library:Tween(Inst, Info, Goal):Play();
+					-- [MOBILE PATCH] tween-storm cut: skip already-invisible instances
+					local Goal = nil;
+					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = V end; end;
+					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
 				end;
 			end;
 		else
 			for Inst, PMap in FadeOriginals do
 				if Inst and Inst.Parent then
-					local Goal = {};
-					for P in PMap do Goal[P] = 1 end;
-					Library:Tween(Inst, Info, Goal):Play();
+					-- [MOBILE PATCH] tween-storm cut: only fade what's visible
+					local Goal = nil;
+					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = 1 end; end;
+					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
 				end;
 			end;
 			task.delay(Info.Time + 0.05, function()
@@ -9031,17 +9239,19 @@ local Outer = self:CreateInstance("Frame", {
 			Gui.Enabled = true;
 			for Inst, PMap in FadeOriginals do
 				if Inst and Inst.Parent then
-					local Goal = {};
-					for P, V in PMap do Goal[P] = V end;
-					Library:Tween(Inst, Info, Goal):Play();
+					-- [MOBILE PATCH] tween-storm cut: skip already-invisible instances
+					local Goal = nil;
+					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = V end; end;
+					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
 				end;
 			end;
 		else
 			for Inst, PMap in FadeOriginals do
 				if Inst and Inst.Parent then
-					local Goal = {};
-					for P in PMap do Goal[P] = 1 end;
-					Library:Tween(Inst, Info, Goal):Play();
+					-- [MOBILE PATCH] tween-storm cut: only fade what's visible
+					local Goal = nil;
+					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = 1 end; end;
+					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
 				end;
 			end;
 			task.delay(Info.Time + 0.05, function()
@@ -9807,6 +10017,7 @@ function Library:InvViewer(Opts)
 		MinSize = Vector2.new(0, math.max(MinHeight - 45, 0));
 	});
 	Library:RegisterAccent(Scroller, "ScrollBarImageColor3");
+	Library:_AttachScrollbar(Scroller); -- [MOBILE PATCH] slim custom scrollbar
 	self:CreateInstance("UIListLayout", {
 		Parent        = Scroller;
 		FillDirection = Enum.FillDirection.Vertical;
@@ -10154,17 +10365,19 @@ function Library:InvViewer(Opts)
 			Outer.Visible = true;
 			for Inst, PMap in FadeOriginals do
 				if Inst and Inst.Parent then
-					local Goal = {};
-					for P, V in PMap do Goal[P] = V end;
-					Library:Tween(Inst, Info, Goal):Play();
+					-- [MOBILE PATCH] tween-storm cut: skip already-invisible instances
+					local Goal = nil;
+					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = V end; end;
+					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
 				end;
 			end;
 		else
 			for Inst, PMap in FadeOriginals do
 				if Inst and Inst.Parent then
-					local Goal = {};
-					for P in PMap do Goal[P] = 1 end;
-					Library:Tween(Inst, Info, Goal):Play();
+					-- [MOBILE PATCH] tween-storm cut: only fade what's visible
+					local Goal = nil;
+					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = 1 end; end;
+					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
 				end;
 			end;
 			task.delay(Info.Time + 0.05, function()
