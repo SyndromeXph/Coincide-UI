@@ -4963,12 +4963,15 @@ function Library:Window(Opts)
 	if Width  < MinWidth  then Width  = MinWidth  end;
 	if Height < MinHeight then Height = MinHeight end;
 
-	-- [MOBILE PATCH] use the first window's real size as the auto-scale reference,
-	-- so the fit is computed for the actual menu instead of a hardcoded guess
-	if IsMobilePlatform and Library._AutoScaleRefW == nil then
-		Library._AutoScaleRefW = Width;
-		Library._AutoScaleRefH = Height;
-		if Library.SetAutoUIScale then Library:SetAutoUIScale() end;
+	-- [MOBILE PATCH] LinoriaLib-exact mobile window sizing (Library.lua:6545): on touch devices
+	-- the menu fills the screen vertically — viewport height minus the 35px top bar, clamped to
+	-- 200..600 — and defaults to 550 wide, never exceeding the screen. Window stays centered
+	-- (AnchorPoint 0.5 below), so the result is the exact LinoriaLib mobile layout.
+	if IsMobilePlatform then
+		local Cam = workspace.CurrentCamera;
+		local Vp  = (Cam and Cam.ViewportSize) or Vector2.new(800, 600);
+		Width  = math.min(tonumber(Opts.Width) or 550, math.max(math.floor(Vp.X) - 10, MinWidth));
+		Height = math.clamp(math.floor(Vp.Y) - 35, 200, 600);
 	end;
 
 	local Gui = self:CreateInstance("ScreenGui", {
@@ -6988,7 +6991,7 @@ function Library:SettingsWindow(Opts)
 			Name = "UI Scale"; Flag = "MobileUIScale";
 			Min = 50; Max = 300; Step = 5; Decimals = 0; Suffix = "%";
 			Default = math.clamp(math.floor((Library._UIScaleValue or 1) * 100 + 0.5), 50, 300);
-			Tooltip = "Scales the whole menu (LinoriaLib SetDPIScale equivalent); mobile auto-enlarges for readability";
+			Tooltip = "Scales the whole menu (LinoriaLib SetDPIScale equivalent); default 100% = native size, same as LinoriaLib";
 			Callback = function(V) Library:SetDPIScale(V) end;
 		});
 		SecMenu:Button({
@@ -9984,9 +9987,11 @@ function Library:InvViewer(Opts)
 end;
 
 --============================================================
--- [MOBILE PATCH] Mobile support layer (v6)
+-- [MOBILE PATCH] Mobile support layer (v8, LinoriaLib-identical)
 --  - PC / mobile auto-detect  (Library.IsMobile)
---  - fill-the-screen scaling  (auto; override via SetDPIScale / SetUIScale)
+--  - NO auto-scaling          (native size like LinoriaLib; SetDPIScale/SetUIScale to opt in)
+--  - mobile window sizing     (Library.lua:6545 — height fills screen minus 35px top bar,
+--                              clamped 200..600, 550 wide by default, centered)
 --  - floating buttons         (LinoriaLib-style "Toggle UI" / "Lock UI" pills)
 --  - ghost-outline touch drag + CanDrag guards (Unnamed-style)
 --  - on-screen keyboard avoidance for TextBoxes
@@ -10006,7 +10011,7 @@ do
 	local GuiRoot = (gethui and gethui()) or CoreGui;
 
 	-----------------------------------------------------
-	-- UI scale system (PC = 1.0, phones auto-fit)
+	-- UI scale system (all platforms default to 1.0, manual opt-in only)
 	-----------------------------------------------------
 	Library._UIScaleValue = 1;
 	Library._UIScaleAuto  = true;
@@ -10020,21 +10025,12 @@ do
 	end;
 
 	local function ComputeAutoScale()
-		if not Library.IsMobile then return 1 end;
-		local Cam = Workspace.CurrentCamera;
-		if not Cam then return 1 end;
-		local Vp = Cam.ViewportSize;
-		-- [MOBILE PATCH] fit-the-window: scale so the whole window lands INSIDE the
-		-- usable viewport (margins + topbar inset). Reference size = the first
-		-- window actually created (falls back to 550x555). Content taller than the
-		-- window scrolls inside the columns. High-res phones get enlarged UIs
-		-- (up to 2x), small screens shrink to fit (0.5 floor).
-		local RefW = Library._AutoScaleRefW or 550;
-		local RefH = Library._AutoScaleRefH or 555;
-		local Margin = 14;
-		local AvailW = math.max(Vp.X - Margin * 2, 200);
-		local AvailH = math.max(Vp.Y - Margin * 2 - GuiInset, 200);
-		return math.clamp(math.min(AvailW / RefW, AvailH / RefH), 0.5, 2);
+		-- [MOBILE PATCH] LinoriaLib-parity: NO automatic scaling, on any platform.
+		-- The UI renders at native size exactly as coded (like LinoriaLib, where
+		-- DPIScale defaults to 1); scripts opt into scaling explicitly via
+		-- Library:SetDPIScale(percent) / SetUIScale. High-DPI phones make native
+		-- sizes look large already -- that is the LinoriaLib mobile look.
+		return 1;
 	end;
 
 	function Library:SetUIScale(N)
