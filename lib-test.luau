@@ -695,27 +695,16 @@ function Library:Draggable(TargetFrame, DragHandle, IgnoreLock)
 	local Handle = DragHandle or TargetFrame;
 	local Dragging = false;
 	local DragStart, StartPosition;
-	-- [MOBILE PATCH] render-driven drag state: input events only RECORD the latest
-	-- pointer position; the window position is applied once per rendered frame.
-	-- (InputChanged fires at an irregular rate on touch -> visible stutter; applying
-	-- on RenderStepped is frame-rate smooth everywhere. LinoriaLib does the same
-	-- with a RenderStepped:Wait() drag loop.)
+
+	-- [MOBILE PATCH] direct 1:1 drag for BOTH mouse and touch, applied once per
+	-- rendered frame — input events only record the latest pointer position.
+	-- (The ghost-outline drag was removed on request: the window itself follows
+	-- the finger now; RenderStepped application keeps it frame-rate smooth.)
 	local LastInput = nil;
 	local Dirty     = false;
 
-	-- [MOBILE PATCH] ghost-outline touch drag (Unnamed-style): on touch, only a
-	-- transparent accent-stroked outline follows the finger 1:1; the real window
-	-- snaps to it on release. No per-frame full-window re-layout -> silky on phones.
-	local Ghost, GhostStart;
-	local GhostScale = 1;
-
-	local function DestroyGhost()
-		if Ghost then Ghost:Destroy() end;
-		Ghost, GhostStart = nil, nil;
-	end;
-
-	-- [MOBILE PATCH] UIShadow blur re-renders every frame while the window moves/resizes
-	-- -> visible stutter. Park all descendant shadows during the drag, restore on release.
+	-- [MOBILE PATCH] UIShadow blur re-renders every frame while the window moves
+	-- -> visible stutter. Park all descendant shadows during the drag, restore after.
 	local ShadowCache = nil;
 	local function SetShadows(Enabled)
 		if not ShadowCache then
@@ -755,12 +744,12 @@ function Library:Draggable(TargetFrame, DragHandle, IgnoreLock)
 			local Tx = StartPosition.X.Scale * Ps.X + NewX * S - Ap.X * Ts.X;
 			local Ty = StartPosition.Y.Scale * Ps.Y + NewY * S - Ap.Y * Ts.Y;
 			Tx = math.clamp(Tx, -(Ts.X - Margin), math.max(Ps.X - Margin, 0));
-			Ty = math.clamp(Ty, -(Ts.Y - Margin), math.max(Ps.Y - Margin, 0)); -- [MOBILE PATCH] negative allowed: pan oversized windows
+			Ty = math.clamp(Ty, -(Ts.Y - Margin), math.max(Ps.Y - Margin, 0)); -- negative allowed: pan oversized windows
 			NewX = (Tx + Ap.X * Ts.X - StartPosition.X.Scale * Ps.X) / S;
 			NewY = (Ty + Ap.Y * Ts.Y - StartPosition.Y.Scale * Ps.Y) / S;
 		end;
-		-- [MOBILE PATCH] direct 1:1 assignment (LinoriaLib-style): no tween chasing
-		-- the finger, so nothing glides on after release and Lock freezes instantly
+		-- direct 1:1 assignment (LinoriaLib-style): no tween chasing the finger,
+		-- so nothing glides on after release and Lock freezes instantly
 		TargetFrame.Position = UDim2.new(
 			StartPosition.X.Scale,
 			NewX,
@@ -769,62 +758,9 @@ function Library:Draggable(TargetFrame, DragHandle, IgnoreLock)
 		);
 	end;
 
-	-- ghost variant: the outline lives in the unscaled ScreenGui, all math in screen px
-	local function SetGhost(Input)
-		if not (Ghost and GhostStart and DragStart) then return end;
-		local Delta = Input.Position - DragStart;
-		local NewX = GhostStart.X.Offset + Delta.X;
-		local NewY = GhostStart.Y.Offset + Delta.Y;
-		local Parent = Ghost.Parent;
-		if Parent and Parent:IsA("GuiObject") then
-			local Ps = Parent.AbsoluteSize;
-			local Ts = Ghost.AbsoluteSize;
-			local Ap = Ghost.AnchorPoint;
-			local Margin = 40;
-			local Tx = GhostStart.X.Scale * Ps.X + NewX - Ap.X * Ts.X;
-			local Ty = GhostStart.Y.Scale * Ps.Y + NewY - Ap.Y * Ts.Y;
-			Tx = math.clamp(Tx, -(Ts.X - Margin), math.max(Ps.X - Margin, 0));
-			Ty = math.clamp(Ty, -(Ts.Y - Margin), math.max(Ps.Y - Margin, 0)); -- [MOBILE PATCH] negative allowed: pan oversized windows
-			NewX = Tx + Ap.X * Ts.X - GhostStart.X.Scale * Ps.X;
-			NewY = Ty + Ap.Y * Ts.Y - GhostStart.Y.Scale * Ps.Y;
-		end;
-		Ghost.Position = UDim2.new(GhostStart.X.Scale, NewX, GhostStart.Y.Scale, NewY);
-	end;
-
-	local function SpawnGhost()
-		DestroyGhost();
-		local Root = TargetFrame;
-		while Root.Parent and not Root.Parent:IsA("ScreenGui") do Root = Root.Parent end;
-		local Gui = Root.Parent;
-		if not Gui then return end;
-		GhostScale = Library:_GetUIScaleOf(TargetFrame);
-		if GhostScale <= 0 then GhostScale = 1 end;
-		local Sz  = TargetFrame.Size;
-		local Pos = TargetFrame.Position;
-		-- pre-multiply offsets by the UI scale so the ghost matches the window's visual rect
-		Ghost = Library:CreateInstance("Frame", {
-			Name                   = "DragGhost";
-			Parent                 = Gui;
-			AnchorPoint            = TargetFrame.AnchorPoint;
-			Size                   = UDim2.new(Sz.X.Scale, Sz.X.Offset * GhostScale, Sz.Y.Scale, Sz.Y.Offset * GhostScale);
-			Position               = UDim2.new(Pos.X.Scale, Pos.X.Offset * GhostScale, Pos.Y.Scale, Pos.Y.Offset * GhostScale);
-			BackgroundTransparency = 1;
-			BorderSizePixel        = 0;
-			ZIndex                 = 999;
-		});
-		Library:CreateInstance("UIStroke", {
-			Parent          = Ghost;
-			Color           = Library.Accent;
-			Thickness       = 1;
-			Transparency    = 0.1;
-			ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
-		});
-		GhostStart = Ghost.Position;
-	end;
-
 	self:Connection(Handle.InputBegan, function(Input)
 		if Library.CantDragForced and not IgnoreLock then return end; -- [MOBILE PATCH] "Lock UI" freezes window dragging
-		if not IgnoreLock and Library.CanDrag == false then return end; -- [MOBILE PATCH] scrolling / dropdown open (Unnamed-style)
+		if not IgnoreLock and Library.CanDrag == false then return end; -- [MOBILE PATCH] scrolling / dropdown open
 		if
 			Input.UserInputType ~= Enum.UserInputType.MouseButton1
 			and Input.UserInputType ~= Enum.UserInputType.Touch
@@ -836,9 +772,6 @@ function Library:Draggable(TargetFrame, DragHandle, IgnoreLock)
 		DragStart          = Input.Position;
 		StartPosition      = TargetFrame.Position;
 		SetShadows(false); -- [MOBILE PATCH] park blur shadows while moving (stutter fix)
-		if Input.UserInputType == Enum.UserInputType.Touch and not IgnoreLock then
-			SpawnGhost(); -- touch: drag the ghost, snap the window on release
-		end;
 	end);
 
 	self:Connection(Handle.InputEnded, function(Input)
@@ -846,14 +779,6 @@ function Library:Draggable(TargetFrame, DragHandle, IgnoreLock)
 			Input.UserInputType == Enum.UserInputType.MouseButton1
 			or Input.UserInputType == Enum.UserInputType.Touch
 		then
-			if Ghost and GhostStart then
-				-- snap the real window to the ghost (screen px -> window offset units)
-				TargetFrame.Position = UDim2.new(
-					GhostStart.X.Scale, Ghost.Position.X.Offset / GhostScale,
-					GhostStart.Y.Scale, Ghost.Position.Y.Offset / GhostScale
-				);
-			end;
-			DestroyGhost();
 			SetShadows(true); -- [MOBILE PATCH] restore shadows after the move
 			Dragging           = false;
 			Library.IsDragging = false;
@@ -876,10 +801,8 @@ function Library:Draggable(TargetFrame, DragHandle, IgnoreLock)
 	self:Connection(RunService.RenderStepped, function()
 		if not Dragging or not Dirty or not LastInput then return end;
 		-- [MOBILE PATCH] a scroll/dropdown guard tripped MID-DRAG: cancel the drag and
-		-- let content scrolling win (no snap) — this was the touch stutter: the window
-		-- and the scrolling column were fighting over the same finger
+		-- let content scrolling win — the window and the column never fight over a finger
 		if not IgnoreLock and Library.CanDrag == false then
-			DestroyGhost();
 			SetShadows(true);
 			Dragging           = false;
 			Library.IsDragging = false;
@@ -887,11 +810,7 @@ function Library:Draggable(TargetFrame, DragHandle, IgnoreLock)
 			return;
 		end;
 		Dirty = false;
-		if Ghost then
-			SetGhost(LastInput);
-		else
-			Set(LastInput);
-		end;
+		Set(LastInput);
 	end);
 end;
 
@@ -10434,7 +10353,7 @@ end;
 --  - mobile window sizing     (Library.lua:6545 — height fills screen minus 35px top bar,
 --                              clamped 200..600, 550 wide by default, centered)
 --  - floating buttons         (LinoriaLib-style "Toggle UI" / "Lock UI" pills)
---  - ghost-outline touch drag + CanDrag guards (Unnamed-style)
+--  - direct 1:1 render-driven drag (mouse + touch) + CanDrag guards + shadow parking
 --  - on-screen keyboard avoidance for TextBoxes
 --  - keeps every window reachable on rotation
 --============================================================
