@@ -699,7 +699,6 @@ function Library:Draggable(TargetFrame, DragHandle, IgnoreLock)
 	local Handle = DragHandle or TargetFrame;
 	local Dragging = false;
 	local DragStart, StartPosition;
-	local DragInfo = TweenInfo.new(0.2, Enum.EasingStyle.Quart, Enum.EasingDirection.Out);
 
 	local function Set(Input)
 		if not DragStart or not StartPosition then return end;
@@ -721,14 +720,14 @@ function Library:Draggable(TargetFrame, DragHandle, IgnoreLock)
 			NewX = (Tx + Ap.X * Ts.X - StartPosition.X.Scale * Ps.X) / S;
 			NewY = (Ty + Ap.Y * Ts.Y - StartPosition.Y.Scale * Ps.Y) / S;
 		end;
-		Library:Tween(TargetFrame, DragInfo, {
-			Position = UDim2.new(
-				StartPosition.X.Scale,
-				NewX,
-				StartPosition.Y.Scale,
-				NewY
-			);
-		}):Play();
+		-- [MOBILE PATCH] direct 1:1 assignment (LinoriaLib-style): no tween chasing
+		-- the finger, so nothing glides on after release and Lock freezes instantly
+		TargetFrame.Position = UDim2.new(
+			StartPosition.X.Scale,
+			NewX,
+			StartPosition.Y.Scale,
+			NewY
+		);
 	end;
 
 	self:Connection(Handle.InputBegan, function(Input)
@@ -832,7 +831,6 @@ print("rn7")
 
 function Library:Resizable(TargetFrame, Minimum, Maximum)
 	Minimum = Minimum or Vector2.new(TargetFrame.Size.X.Offset, TargetFrame.Size.Y.Offset);
-	local ResizeInfo = TweenInfo.new(0.17, Enum.EasingStyle.Quart, Enum.EasingDirection.Out);
 
 	local Grip = self:CreateInstance("TextButton", {
 		Parent                 = TargetFrame;
@@ -854,6 +852,7 @@ function Library:Resizable(TargetFrame, Minimum, Maximum)
 	local ResizeMax = TargetFrame.Parent.AbsoluteSize - TargetFrame.AbsoluteSize;
 
 	self:Connection(Grip.InputBegan, function(Input)
+		if Library.CantDragForced then return end; -- [MOBILE PATCH] "Lock UI" also freezes resizing
 		if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
 			Resizing = true;
 			local S = Library:_GetUIScaleOf(TargetFrame); -- [MOBILE PATCH]
@@ -876,7 +875,7 @@ function Library:Resizable(TargetFrame, Minimum, Maximum)
 				0, math.clamp(Delta.X.Offset, Minimum.X, ResizeMax.X),
 				0, math.clamp(Delta.Y.Offset, Minimum.Y, ResizeMax.Y)
 			);
-			Library:Tween(TargetFrame, ResizeInfo, { Size = Delta }):Play();
+			TargetFrame.Size = Delta; -- [MOBILE PATCH] direct assignment, no tween lag
 		end;
 	end);
 
@@ -4913,6 +4912,10 @@ function Library:Window(Opts)
 	-- (UIShadow is unsupported on some clients -> pcall makes it a safe no-op)
 	pcall(function() Library:AddGlowingV2(Outer, Color3.fromHex("000000"), 0.55) end);
 	pcall(function() Library:AddGlowingV2(Outer, Library.Accent, 0.86) end);
+
+	-- [MOBILE PATCH] dedicated zoom node for the open/close animation
+	-- (separate from the mobile-fit UIScale; nested UIScales multiply cleanly)
+	local AnimScale = self:CreateInstance("UIScale", { Parent = Outer; Scale = 1 });
 	self:CreateInstance("UIStroke", {
 		Parent          = InnerOutline;
 		Color           = Color3.fromHex("393939");
@@ -5424,7 +5427,7 @@ RegisterGradLerp(GradEntry)
 	function Window:SetVisible(State)
 		if self.Visible == State then return end;
 		self.Visible = State and true or false;
-		if Library._ReduceAnimations then Gui.Enabled = self.Visible; return end; -- [MOBILE PATCH] lite mode: instant toggle, no tween storm
+		if Library._ReduceAnimations then Gui.Enabled = self.Visible; AnimScale.Scale = 1; return end; -- [MOBILE PATCH] lite mode: instant toggle, no tween storm
 		self._FadeToken = self._FadeToken + 1;
 		local Mine = self._FadeToken;
 		local Info = TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
@@ -5442,6 +5445,11 @@ RegisterGradLerp(GradEntry)
 		if self.Visible then
 			self._ShownAt = os.clock();
 			Gui.Enabled = true;
+			-- [MOBILE PATCH] subtle zoom-in on top of the fade (Quint Out = snappy settle)
+			AnimScale.Scale = 0.97;
+			Library:Tween(AnimScale, TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+				Scale = 1;
+			}):Play();
 			for Inst, PMap in self._FadeOriginals do
 				if Inst.Parent then
 					local Goal = {};
@@ -5450,6 +5458,10 @@ RegisterGradLerp(GradEntry)
 				end;
 			end;
 		else
+			-- [MOBILE PATCH] matching zoom-out while fading
+			Library:Tween(AnimScale, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+				Scale = 0.97;
+			}):Play();
 			for Inst, PMap in self._FadeOriginals do
 				if Inst.Parent then
 					local Goal = {};
@@ -6850,7 +6862,6 @@ function Library:SettingsWindow(Opts)
 			Min = 0.05, Max = 2, Step = 0.05, Decimals = 2, Default = 1;
 			Callback = function(V) Library.AnimationSpeed = V end;
 		});
-		SecMenu:Slider({ Name = "Dragging Speed", Flag = "DraggingSpeed", Min = 0, Max = 2, Step = 0.05, Decimals = 2, Default = 0.05 });
 		-- [MOBILE PATCH] touch-device controls: UI scale, lite mode, floating button
 		SecMenu:Slider({
 			Name = "UI Scale"; Flag = "MobileUIScale";
@@ -9917,6 +9928,7 @@ do
 	function Library:_BindKeyboardAvoidance(Tb)
 		local SavedPos = nil;
 		Tb.Focused:Connect(function()
+			if Library.CantDragForced then return end; -- [MOBILE PATCH] "Lock UI" freezes keyboard avoidance too
 			local Top = Tb;
 			while Top.Parent and not Top.Parent:IsA("ScreenGui") do Top = Top.Parent end;
 			if not (Top and Top.Parent and Top:IsA("GuiObject")) then return end;
@@ -10056,55 +10068,46 @@ do
 
 		local Obj; -- forward declaration: long-press closures reference it
 
-		-- one LinoriaLib-style pill: black outline -> accent inset stroke -> dark gradient face
+		-- one LinoriaLib-style pill, pixel-faithful to mstudio45/LinoriaLib:
+		-- black 1px border -> MainColor #1C1C1C with accent INSET border -> white face
+		-- with a darker->main vertical gradient (Rotation -90) -> Code font label
 		local function CreatePill(Text, PosY)
 			local Outer = OrigCreateInstance(Library, "Frame", {
 				Name             = Text .. "Outer";
 				Parent           = BtnGui;
 				Position         = UDim2.new(0.008, 0, PosY, 0);
 				Size             = UDim2.new(0, 77, 0, 30);
-				BackgroundColor3 = Color3.fromHex("0D0D0D");
-				BorderSizePixel  = 0;
+				BackgroundColor3 = Color3.fromHex("1C1C1C"); -- LinoriaLib MainColor
+				BorderColor3     = Color3.new(0, 0, 0);      -- legacy 1px black border
 				ZIndex           = 200;
-			});
-			OrigCreateInstance(Library, "UIStroke", {
-				Parent          = Outer;
-				Color           = Color3.fromHex("000000");
-				Thickness       = 1;
-				ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
 			});
 
 			local Inner = OrigCreateInstance(Library, "Frame", {
 				Name             = "Inner";
 				Parent           = Outer;
-				Position         = UDim2.new(0, 1, 0, 1);
-				Size             = UDim2.new(1, -2, 1, -2);
-				BackgroundColor3 = Color3.fromHex("161616");
-				BorderSizePixel  = 0;
+				Size             = UDim2.new(1, 0, 1, 0);
+				BackgroundColor3 = Color3.fromHex("1C1C1C"); -- LinoriaLib MainColor
+				BorderColor3     = Library.Accent;           -- accent inset border
+				BorderMode       = Enum.BorderMode.Inset;
 				ZIndex           = 201;
 			});
-			local AccentStroke = OrigCreateInstance(Library, "UIStroke", {
-				Parent          = Inner;
-				Thickness       = 1;
-				ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
-			});
-			Library:RegisterAccent(AccentStroke, "Color"); -- accent inset border, follows theme
+			Library:RegisterAccent(Inner, "BorderColor3"); -- follows theme accent
 
 			local Face = OrigCreateInstance(Library, "Frame", {
 				Name             = "Face";
 				Parent           = Inner;
 				Position         = UDim2.new(0, 1, 0, 1);
 				Size             = UDim2.new(1, -2, 1, -2);
-				BackgroundColor3 = Color3.fromHex("FFFFFF");
+				BackgroundColor3 = Color3.new(1, 1, 1);
 				BorderSizePixel  = 0;
 				ZIndex           = 202;
 			});
 			OrigCreateInstance(Library, "UIGradient", {
 				Parent   = Face;
-				Rotation = -90; -- darker towards the bottom, LinoriaLib-style
+				Rotation = -90; -- LinoriaLib: darker main -> main, bottom -> top
 				Color    = NewColorSequence({
-					NewColorSequenceKeypoint(0, Color3.fromHex("1E1E1E"));
-					NewColorSequenceKeypoint(1, Color3.fromHex("121212"));
+					NewColorSequenceKeypoint(0, Color3.fromHex("0E0E0E")); -- GetDarkerColor(MainColor)
+					NewColorSequenceKeypoint(1, Color3.fromHex("1C1C1C")); -- MainColor
 				});
 			});
 
@@ -10120,15 +10123,29 @@ do
 				TextStrokeTransparency = 0; -- crisp text outline like LinoriaLib
 				TextXAlignment         = Enum.TextXAlignment.Left;
 				AutoButtonColor        = false;
+				Font                   = Enum.Font.Code; -- LinoriaLib's font
 				ZIndex                 = 203;
 			});
-			if ProggyCleanFont then Btn.FontFace = ProggyCleanFont end;
 
-			return Outer, Btn;
+			return Outer, Btn, Face;
 		end;
 
-		local TogglePill, ToggleBtn = CreatePill("Toggle UI", 0.018);
-		local LockPill,   LockBtn   = CreatePill("Lock UI",   0.075);
+		-- quick press flash: face brightens for a beat, then eases back
+		local function PlayPressFlash(Face)
+			if Library._ReduceAnimations then return end;
+			Library:Tween(Face, TweenInfo.new(0.06, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				BackgroundTransparency = 0.45;
+			}):Play();
+			task.delay(0.06, function()
+				if not Face.Parent then return end;
+				Library:Tween(Face, TweenInfo.new(0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+					BackgroundTransparency = 0;
+				}):Play();
+			end);
+		end;
+
+		local TogglePill, ToggleBtn, ToggleFace = CreatePill("Toggle UI", 0.018);
+		local LockPill,   LockBtn,   LockFace   = CreatePill("Lock UI",   0.075);
 
 		-- both pills draggable; IgnoreLock so "Lock UI" never freezes the pills themselves
 		Library:Draggable(TogglePill, ToggleBtn, true);
@@ -10170,10 +10187,12 @@ do
 		end;
 
 		BindTapDrag(ToggleBtn, function()
+			PlayPressFlash(ToggleFace);
 			local Win = Library.CurrentlyOpen;
 			if Win then Win:Toggle() end;
 		end);
 		BindTapDrag(LockBtn, function()
+			PlayPressFlash(LockFace);
 			Library.CantDragForced = not Library.CantDragForced;
 			LockBtn.Text = Library.CantDragForced and "Unlock UI" or "Lock UI";
 		end);
