@@ -4963,6 +4963,14 @@ function Library:Window(Opts)
 	if Width  < MinWidth  then Width  = MinWidth  end;
 	if Height < MinHeight then Height = MinHeight end;
 
+	-- [MOBILE PATCH] use the first window's real size as the auto-scale reference,
+	-- so the fit is computed for the actual menu instead of a hardcoded guess
+	if IsMobilePlatform and Library._AutoScaleRefW == nil then
+		Library._AutoScaleRefW = Width;
+		Library._AutoScaleRefH = Height;
+		if Library.SetAutoUIScale then Library:SetAutoUIScale() end;
+	end;
+
 	local Gui = self:CreateInstance("ScreenGui", {
 		Name = "NetworphTallWindow";
 		Parent = (gethui and gethui()) or CoreGui;
@@ -6978,9 +6986,9 @@ function Library:SettingsWindow(Opts)
 		-- [MOBILE PATCH] touch-device controls: UI scale, lite mode, floating button
 		SecMenu:Slider({
 			Name = "UI Scale"; Flag = "MobileUIScale";
-			Min = 50; Max = 200; Step = 5; Decimals = 0; Suffix = "%";
-			Default = math.clamp(math.floor((Library._UIScaleValue or 1) * 100 + 0.5), 50, 200);
-			Tooltip = "Scales the whole menu (LinoriaLib SetDPIScale equivalent); mobile auto-fits to the screen";
+			Min = 50; Max = 300; Step = 5; Decimals = 0; Suffix = "%";
+			Default = math.clamp(math.floor((Library._UIScaleValue or 1) * 100 + 0.5), 50, 300);
+			Tooltip = "Scales the whole menu (LinoriaLib SetDPIScale equivalent); mobile auto-enlarges for readability";
 			Callback = function(V) Library:SetDPIScale(V) end;
 		});
 		SecMenu:Button({
@@ -10016,12 +10024,14 @@ do
 		local Cam = Workspace.CurrentCamera;
 		if not Cam then return 1 end;
 		local Vp = Cam.ViewportSize;
-		-- [MOBILE PATCH] fill-the-screen: scale the reference menu (~550x555) so it
-		-- exactly fills the viewport (margins + topbar inset respected). On high-res
-		-- phones this ENLARGES the UI (e.g. ~183% on 2400x1080) for big readable
-		-- controls like LinoriaLib's mobile screenshots; on small screens it shrinks
-		-- to fit (0.5 floor). Users can override via UI Scale / SetDPIScale.
-		local RefW, RefH, Margin = 550, 555, 14;
+		-- [MOBILE PATCH] fit-the-window: scale so the whole window lands INSIDE the
+		-- usable viewport (margins + topbar inset). Reference size = the first
+		-- window actually created (falls back to 550x555). Content taller than the
+		-- window scrolls inside the columns. High-res phones get enlarged UIs
+		-- (up to 2x), small screens shrink to fit (0.5 floor).
+		local RefW = Library._AutoScaleRefW or 550;
+		local RefH = Library._AutoScaleRefH or 555;
+		local Margin = 14;
 		local AvailW = math.max(Vp.X - Margin * 2, 200);
 		local AvailH = math.max(Vp.Y - Margin * 2 - GuiInset, 200);
 		return math.clamp(math.min(AvailW / RefW, AvailH / RefH), 0.5, 2);
@@ -10030,7 +10040,7 @@ do
 	function Library:SetUIScale(N)
 		N = tonumber(N) or 1;
 		Library._UIScaleAuto  = false;
-		Library._UIScaleValue = math.clamp(N, 0.4, 2);
+		Library._UIScaleValue = math.clamp(N, 0.4, 3);
 		ApplyScale(Library._UIScaleValue);
 	end;
 
@@ -10140,8 +10150,8 @@ do
 		local Ny;
 		if Ts.Y > Ps.Y then
 			-- [MOBILE PATCH] window taller than the screen (enlarged UI): pin its
-			-- top edge to the screen top so the title area stays grabbable
-			Ny = math.clamp(Ty, -(Ts.Y - Margin), 0);
+			-- top edge to the screen top so the title area is always grabbable
+			Ny = 0;
 		else
 			Ny = math.clamp(Ty, 0, math.max(Ps.Y - Margin, 0));
 		end;
@@ -10358,6 +10368,7 @@ do
 		Library.AnimationSpeed = math.max(tonumber(Library.AnimationSpeed) or 1, 1.5);
 		CreateMobileMenuButton();
 		task.defer(ClampAllWindows);
+		task.delay(0.5, ClampAllWindows); -- catch windows created right after load
 	end;
 end;
 
