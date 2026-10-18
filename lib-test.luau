@@ -46,8 +46,9 @@ local function ClampWindowSize(Width, Height)
 	local Vp = Cam and Cam.ViewportSize or Vector2.new(800, 600);
 	-- clamp the *rendered* size: unscaled units -> divide by the UI scale
 	-- height also respects the topbar inset so the menu never sits under it
-	local MaxW = math.max((Vp.X - 16) / MobileUIScaleValue, 220);
-	local MaxH = math.max((Vp.Y - 16 - GuiInset) / MobileUIScaleValue, 220);
+	-- floor 200 matches LinoriaLib's mobile MinSize (550x200): flatter menus allowed
+	local MaxW = math.max((Vp.X - 16) / MobileUIScaleValue, 200);
+	local MaxH = math.max((Vp.Y - 16 - GuiInset) / MobileUIScaleValue, 200);
 	return math.min(Width, MaxW), math.min(Height, MaxH);
 end;
 
@@ -694,7 +695,7 @@ function Library:RegisterFont(Name, Url, Weight, Style)
 	return getcustomasset(DescPath);
 end;
 
-function Library:Draggable(TargetFrame, DragHandle)
+function Library:Draggable(TargetFrame, DragHandle, IgnoreLock)
 	local Handle = DragHandle or TargetFrame;
 	local Dragging = false;
 	local DragStart, StartPosition;
@@ -731,6 +732,7 @@ function Library:Draggable(TargetFrame, DragHandle)
 	end;
 
 	self:Connection(Handle.InputBegan, function(Input)
+		if Library.CantDragForced and not IgnoreLock then return end; -- [MOBILE PATCH] "Lock UI" freezes window dragging
 		if
 			Input.UserInputType ~= Enum.UserInputType.MouseButton1
 			and Input.UserInputType ~= Enum.UserInputType.Touch
@@ -4859,7 +4861,8 @@ function Library:Window(Opts)
 	local Width     = tonumber(Opts.Width)     or 400;
 	local Height    = tonumber(Opts.Height)    or 700;
 	local MinWidth  = tonumber(Opts.MinWidth)  or 280;
-	local MinHeight = tonumber(Opts.MinHeight) or 400;
+	-- [MOBILE PATCH] LinoriaLib-style mobile MinSize: flatter menus allowed on touch (550x200 spirit)
+	local MinHeight = tonumber(Opts.MinHeight) or (IsMobilePlatform and 200 or 400);
 	Width, Height       = ClampWindowSize(Width, Height);       -- [MOBILE PATCH]
 	MinWidth, MinHeight = ClampWindowSize(MinWidth, MinHeight); -- [MOBILE PATCH]
 	if Width  < MinWidth  then Width  = MinWidth  end;
@@ -6873,7 +6876,7 @@ function Library:SettingsWindow(Opts)
 		SecMenu:Toggle({
 			Name = "Floating Menu Button"; Flag = "MobileMenuBtn";
 			Default = Library.MobileMenuButton ~= nil;
-			Tooltip = "Shows the draggable on-screen menu button";
+			Tooltip = "Shows the on-screen Toggle UI / Lock UI buttons";
 			Callback = function(S)
 				if S then
 					local B = Library.CreateMobileMenuButton and Library:CreateMobileMenuButton();
@@ -9852,12 +9855,13 @@ end;
 -- [MOBILE PATCH] Mobile support layer (v3)
 --  - PC / mobile auto-detect  (Library.IsMobile)
 --  - whole-UI scaling         (Library:SetUIScale / auto fit on phones)
---  - floating menu button v2  (circular logo button, accent ring, pulse)
+--  - floating buttons         (LinoriaLib-style "Toggle UI" / "Lock UI" pills)
 --  - on-screen keyboard avoidance for TextBoxes
 --  - keeps every window inside the viewport on rotation
 --============================================================
 Library.IsMobile = IsMobilePlatform;
 Library._ReduceAnimations = false;
+Library.CantDragForced = false; -- [MOBILE PATCH] "Lock UI" pill freezes window dragging (LinoriaLib-style)
 
 function Library:SetReduceAnimations(B)
 	Library._ReduceAnimations = B and true or false;
@@ -10034,7 +10038,9 @@ do
 	end;
 
 	-----------------------------------------------------
-	-- floating menu button v2: circular logo button
+	-----------------------------------------------------
+	-- floating buttons (LinoriaLib-style): "Toggle UI" + "Lock UI"
+	-- 77x30 dark gradient pills with an accent inset border, draggable
 	-----------------------------------------------------
 	local function CreateMobileMenuButton()
 		if Library.MobileMenuButton then return Library.MobileMenuButton end;
@@ -10048,171 +10054,105 @@ do
 			ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
 		});
 
-		-- adaptive touch target: ~1/7 of the short screen edge, clamped 48-60px
-		local Cam0 = Workspace.CurrentCamera;
-		local Vp0 = Cam0 and Cam0.ViewportSize or Vector2.new(800, 600);
-		local BtnSize = math.clamp(math.floor(math.min(Vp0.X, Vp0.Y) / 7), 48, 60);
+		local Obj; -- forward declaration: long-press closures reference it
 
-		local Btn = OrigCreateInstance(Library, "TextButton", {
-			Name                   = "Button";
-			Parent                 = BtnGui;
-			AnchorPoint            = Vector2.new(1, 0.5);
-			Position               = UDim2.new(1, -12, 0.5, 0);
-			Size                   = UDim2.fromOffset(BtnSize, BtnSize);
-			BackgroundColor3       = Color3.fromHex("FFFFFF");
-			BackgroundTransparency = 0.08;
-			BorderSizePixel        = 0;
-			Text                   = "";
-			AutoButtonColor        = false;
-			ZIndex                 = 100;
-		});
-		OrigCreateInstance(Library, "UICorner", { Parent = Btn; CornerRadius = UDim.new(1, 0) });
-
-		-- vertical gradient gives the circle depth (vitremake-style shading)
-		local BtnGradient = OrigCreateInstance(Library, "UIGradient", {
-			Parent   = Btn;
-			Rotation = 90;
-			Color    = NewColorSequence({
-				NewColorSequenceKeypoint(0, Color3.fromHex("1C1C1E"));
-				NewColorSequenceKeypoint(1, Color3.fromHex("101012"));
+		-- one LinoriaLib-style pill: black outline -> accent inset stroke -> dark gradient face
+		local function CreatePill(Text, PosY)
+			local Outer = OrigCreateInstance(Library, "Frame", {
+				Name             = Text .. "Outer";
+				Parent           = BtnGui;
+				Position         = UDim2.new(0.008, 0, PosY, 0);
+				Size             = UDim2.new(0, 77, 0, 30);
+				BackgroundColor3 = Color3.fromHex("0D0D0D");
+				BorderSizePixel  = 0;
+				ZIndex           = 200;
 			});
-		});
+			OrigCreateInstance(Library, "UIStroke", {
+				Parent          = Outer;
+				Color           = Color3.fromHex("000000");
+				Thickness       = 1;
+				ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+			});
 
-		-- faint inner highlight ring (double-stroke trick, negative BorderOffset)
-		OrigCreateInstance(Library, "UIStroke", {
-			Parent          = Btn;
-			Thickness       = 1;
-			Color           = Color3.fromHex("3A3A40");
-			Transparency    = 0.45;
-			ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
-			BorderOffset    = UDim.new(0, -1);
-		});
+			local Inner = OrigCreateInstance(Library, "Frame", {
+				Name             = "Inner";
+				Parent           = Outer;
+				Position         = UDim2.new(0, 1, 0, 1);
+				Size             = UDim2.new(1, -2, 1, -2);
+				BackgroundColor3 = Color3.fromHex("161616");
+				BorderSizePixel  = 0;
+				ZIndex           = 201;
+			});
+			local AccentStroke = OrigCreateInstance(Library, "UIStroke", {
+				Parent          = Inner;
+				Thickness       = 1;
+				ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+			});
+			Library:RegisterAccent(AccentStroke, "Color"); -- accent inset border, follows theme
 
-		-- accent ring
-		local Ring = OrigCreateInstance(Library, "UIStroke", {
-			Parent          = Btn;
-			Thickness       = 2;
-			Transparency    = 0.15;
-			ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
-		});
-		Library:RegisterAccent(Ring, "Color");
+			local Face = OrigCreateInstance(Library, "Frame", {
+				Name             = "Face";
+				Parent           = Inner;
+				Position         = UDim2.new(0, 1, 0, 1);
+				Size             = UDim2.new(1, -2, 1, -2);
+				BackgroundColor3 = Color3.fromHex("FFFFFF");
+				BorderSizePixel  = 0;
+				ZIndex           = 202;
+			});
+			OrigCreateInstance(Library, "UIGradient", {
+				Parent   = Face;
+				Rotation = -90; -- darker towards the bottom, LinoriaLib-style
+				Color    = NewColorSequence({
+					NewColorSequenceKeypoint(0, Color3.fromHex("1E1E1E"));
+					NewColorSequenceKeypoint(1, Color3.fromHex("121212"));
+				});
+			});
 
-		-- soft accent glow behind the circle
-		pcall(function() Library:AddGlowingV2(Btn, Library.Accent, 0.75) end);
-
-		-- logo (falls back to a text glyph if the asset is unavailable)
-		local LogoSize = math.floor(BtnSize * 0.6);
-		local LogoOk, LogoAsset = pcall(function() return getcustomasset("Hydrogen/logo2.png") end);
-		if LogoOk and LogoAsset and typeof(LogoAsset) == "string" and #LogoAsset > 0 then
-			OrigCreateInstance(Library, "ImageLabel", {
-				Name                 = "Logo";
-				Parent               = Btn;
-				AnchorPoint          = Vector2.new(0.5, 0.5);
-				Position             = UDim2.new(0.5, 0, 0.5, 0);
-				Size                 = UDim2.fromOffset(LogoSize, LogoSize);
+			local Btn = OrigCreateInstance(Library, "TextButton", {
+				Name                   = "Button";
+				Parent                 = Face;
+				Position               = UDim2.new(0, 5, 0, 0);
+				Size                   = UDim2.new(1, -4, 1, 0);
 				BackgroundTransparency = 1;
-				Image                = LogoAsset;
-				ZIndex               = 101;
+				Text                   = Text;
+				TextColor3             = Color3.fromHex("FFFFFF");
+				TextSize               = 14;
+				TextStrokeTransparency = 0; -- crisp text outline like LinoriaLib
+				TextXAlignment         = Enum.TextXAlignment.Left;
+				AutoButtonColor        = false;
+				ZIndex                 = 203;
 			});
-		else
-			local Glyph = OrigCreateInstance(Library, "TextLabel", {
-				Name                 = "Glyph";
-				Parent               = Btn;
-				AnchorPoint          = Vector2.new(0.5, 0.5);
-				Position             = UDim2.new(0.5, 0, 0.5, 0);
-				Size                 = UDim2.fromOffset(LogoSize, LogoSize);
-				BackgroundTransparency = 1;
-				Text                 = "C";
-				TextColor3           = Color3.fromHex("FFFFFF");
-				TextSize             = math.floor(BtnSize * 0.42);
-				ZIndex               = 101;
-			});
-			Library:RegisterAccent(Glyph, "TextColor3");
+			if ProggyCleanFont then Btn.FontFace = ProggyCleanFont end;
+
+			return Outer, Btn;
 		end;
 
-		-- scale node for the tap bounce animation
-		local BtnScale = OrigCreateInstance(Library, "UIScale", { Parent = Btn; Scale = 1 });
-		local ClosedA  = Color3.fromHex("1C1C1E");
-		local ClosedB  = Color3.fromHex("101012");
+		local TogglePill, ToggleBtn = CreatePill("Toggle UI", 0.018);
+		local LockPill,   LockBtn   = CreatePill("Lock UI",   0.075);
 
-		Library:Draggable(Btn);
+		-- both pills draggable; IgnoreLock so "Lock UI" never freezes the pills themselves
+		Library:Draggable(TogglePill, ToggleBtn, true);
+		Library:Draggable(LockPill, LockBtn, true);
 
-		local function PlayTapBounce()
-			if Library._ReduceAnimations then return end;
-			Library:Tween(BtnScale, TweenInfo.new(0.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Scale = 0.82 }):Play();
-			task.delay(0.08, function()
-				Library:Tween(BtnScale, TweenInfo.new(0.35, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out), { Scale = 1 }):Play();
-			end);
-		end;
-
-		local function RefreshStateTint()
-			local Win = Library.CurrentlyOpen;
-			local OpenNow = Win and Win.Visible;
-			-- gradient colors aren't tweenable; rebuild the sequence (one-off, cheap)
-			local A = OpenNow and Library.Accent or ClosedA;
-			local B = OpenNow and Library.Accent:Lerp(Color3.new(0, 0, 0), 0.45) or ClosedB;
-			BtnGradient.Color = NewColorSequence({
-				NewColorSequenceKeypoint(0, A);
-				NewColorSequenceKeypoint(1, B);
-			});
-		end;
-		Library:OnAccent(function() RefreshStateTint() end);
-
-		-- idle breathing pulse on the accent ring (paused while menu is open / lite mode)
-		task.spawn(function()
-			local T = 0;
-			while Btn.Parent do
-				task.wait(0.04);
-				if Library._ReduceAnimations then continue end;
-				local Win = Library.CurrentlyOpen;
-				if Win and Win.Visible then
-					Ring.Transparency = 0.05;
-					continue;
+		-- tap vs drag: <=10px travel counts as a tap; longer travel is a move
+		local function BindTapDrag(Btn, OnTap)
+			local DownPos = nil;
+			local LpFiredAt = 0;
+			Library:Connection(Btn.InputBegan, function(Input)
+				if Input.UserInputType == Enum.UserInputType.Touch
+					or Input.UserInputType == Enum.UserInputType.MouseButton1 then
+					DownPos = Vector2.new(Input.Position.X, Input.Position.Y);
 				end;
-				T = T + 0.04;
-				Ring.Transparency = 0.3 + math.sin(T * 2.4) * 0.25;
-			end;
-		end);
-
-		-- snap the button to the nearest screen edge after a drag
-		local function SnapToEdge()
-			local Cam2 = Workspace.CurrentCamera;
-			if not Cam2 then return end;
-			local Vp = Cam2.ViewportSize;
-			local W = Btn.AbsoluteSize.X;
-			local H = Btn.AbsoluteSize.Y;
-			if Vp.X <= 0 or W <= 0 then return end;
-			-- AnchorPoint is (1, 0.5): topLeftX = Vp.X + offX - W
-			local TopLeftX = Btn.Position.X.Offset - W;
-			local TopLeftY = Vp.Y * Btn.Position.Y.Scale + Btn.Position.Y.Offset - H * 0.5;
-			local GoLeft = (TopLeftX + W * 0.5) < Vp.X * 0.5;
-			local NewOffX = GoLeft and (12 + W - Vp.X) or -12;
-			local NewTopY = math.clamp(TopLeftY, 8, math.max(Vp.Y - H - 8, 8));
-			local NewOffY = NewTopY + H * 0.5 - Vp.Y * Btn.Position.Y.Scale;
-			Library:Tween(Btn, TweenInfo.new(0.25, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
-				Position = UDim2.new(1, NewOffX, Btn.Position.Y.Scale, NewOffY);
-			}):Play();
-		end;
-
-		-- tap = toggle menu; drag = move button (decided by travel distance)
-		local DownPos = nil;
-		local LpFiredAt = 0; -- long-press timestamp, suppresses the tap that follows
-		Library:Connection(Btn.InputBegan, function(Input)
-			if Input.UserInputType == Enum.UserInputType.Touch
-				or Input.UserInputType == Enum.UserInputType.MouseButton1 then
-				DownPos = Vector2.new(Input.Position.X, Input.Position.Y);
-			end;
-		end);
-		Library:Connection(Btn.InputEnded, function(Input)
-			if not DownPos then return end;
-			if Input.UserInputType ~= Enum.UserInputType.Touch
-				and Input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end;
-			local P = Vector2.new(Input.Position.X, Input.Position.Y);
-			local Dist = (P - DownPos).Magnitude;
-			DownPos = nil;
-			if os.clock() - LpFiredAt < 0.35 then return end; -- long-press just handled it
-			if Dist <= 10 then
-				PlayTapBounce();
+			end);
+			Library:Connection(Btn.InputEnded, function(Input)
+				if not DownPos then return end;
+				if Input.UserInputType ~= Enum.UserInputType.Touch
+					and Input.UserInputType ~= Enum.UserInputType.MouseButton1 then return end;
+				local P = Vector2.new(Input.Position.X, Input.Position.Y);
+				local Dist = (P - DownPos).Magnitude;
+				DownPos = nil;
+				if os.clock() - LpFiredAt < 0.35 then return end; -- long-press just handled it
+				if Dist > 10 then return end; -- that was a drag, not a tap
 				-- subtle haptic tick on supported devices
 				pcall(function()
 					HapticService:SetMotor(Enum.UserInputType.Touch, Enum.VibrationMotor.Large, 0.35);
@@ -10220,27 +10160,40 @@ do
 						HapticService:SetMotor(Enum.UserInputType.Touch, Enum.VibrationMotor.Large, 0);
 					end);
 				end);
-				local Win = Library.CurrentlyOpen;
-				if Win then Win:Toggle() end;
-				task.defer(RefreshStateTint);
-			else
-				task.defer(SnapToEdge);
-			end;
+				OnTap();
+			end);
+			-- long-press either pill: snap both back to the default stacked spot
+			Library:BindLongPress(Btn, function()
+				LpFiredAt = os.clock();
+				if Obj then Obj:Reset() end;
+			end, 0.6);
+		end;
+
+		BindTapDrag(ToggleBtn, function()
+			local Win = Library.CurrentlyOpen;
+			if Win then Win:Toggle() end;
+		end);
+		BindTapDrag(LockBtn, function()
+			Library.CantDragForced = not Library.CantDragForced;
+			LockBtn.Text = Library.CantDragForced and "Unlock UI" or "Lock UI";
 		end);
 
-		-- long-press the floating button: snap it back to the default edge spot
-		Library:BindLongPress(Btn, function()
-			LpFiredAt = os.clock();
-			Library:Tween(Btn, TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
-				Position = UDim2.new(1, -12, 0.5, 0);
-			}):Play();
-			Library:Notify("Menu button position reset", 1.5);
-		end, 0.6);
-
-		local Obj = { Gui = BtnGui, Button = Btn, Ring = Ring };
+		Obj = { Gui = BtnGui, Toggle = TogglePill, Lock = LockPill };
 		function Obj:Show() BtnGui.Enabled = true end;
 		function Obj:Hide() BtnGui.Enabled = false end;
-		function Obj:Snap() SnapToEdge() end;
+		function Obj:Snap() -- keep both pills reachable after rotation / resize
+			ClampFrameIntoViewport(TogglePill);
+			ClampFrameIntoViewport(LockPill);
+		end;
+		function Obj:Reset()
+			Library:Tween(TogglePill, TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+				Position = UDim2.new(0.008, 0, 0.018, 0);
+			}):Play();
+			Library:Tween(LockPill, TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+				Position = UDim2.new(0.008, 0, 0.075, 0);
+			}):Play();
+			Library:Notify("Menu buttons position reset", 1.5);
+		end;
 		Library.MobileMenuButton = Obj;
 		return Obj;
 	end;
