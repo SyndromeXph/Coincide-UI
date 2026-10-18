@@ -6664,208 +6664,10 @@ function Library:Playerlist(Opts)
 	return Obj;
 end;
 
-function Library:SettingsWindow(Opts)
-	Opts = typeof(Opts) == "table" and Opts or {};
-	local Title = tostring(Opts.Title or "Settings");
-	local Width = tonumber(Opts.Width) or 240;
-	local Height = tonumber(Opts.Height) or 400;
-	Width, Height = ClampWindowSize(Width, Height); -- [MOBILE PATCH]
-
-	local Gui = self:CreateInstance("ScreenGui", {
-		Name           = "SettingsGui";
-		Parent         = (gethui and gethui()) or CoreGui;
-		IgnoreGuiInset = true;
-		ResetOnSpawn   = false;
-		ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
-	});
-
-	local Outer = self:CreateInstance("Frame", {
-		Name             = "Outer";
-		Parent           = Gui;
-		AnchorPoint      = Vector2.new(1, 0);
-		Position         = UDim2.fromOffset(0, 0);
-		Size             = UDim2.fromOffset(Width, Height);
-		BackgroundColor3 = Color3.fromHex("FFFFFF");
-		BorderSizePixel  = 0;
-	});
-	Library:AddGlowingV2(Outer,Library.Accent,0.4)
-
-	self:CreateInstance("UIGradient", {
-		Parent   = Outer;
-		Rotation = 90;
-		Color    = NewColorSequence({
-			NewColorSequenceKeypoint(0, Color3.fromHex("212121"));
-			NewColorSequenceKeypoint(1, Color3.fromHex("1A1A1A"));
-		});
-	});
-	self:CreateInstance("UIStroke", {
-		Parent          = Outer;
-		Color           = Color3.fromHex("000000");
-		Thickness       = 1;
-		ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
-		LineJoinMode    = Enum.LineJoinMode.Miter;
-	});
-
-	local InnerOutline = self:CreateInstance("Frame", {
-		Parent                 = Outer;
-		Position               = UDim2.new(0, 1, 0, 1);
-		Size                   = UDim2.new(1, -2, 1, -2);
-		BackgroundTransparency = 1;
-		BorderSizePixel        = 0;
-	});
-	self:CreateInstance("UIStroke", {
-		Parent          = InnerOutline;
-		Color           = Color3.fromHex("393939");
-		Thickness       = 1;
-		ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
-		LineJoinMode    = Enum.LineJoinMode.Miter;
-	});
-
-	local TopLine = self:CreateInstance("Frame", {
-		Parent           = Outer;
-		Position         = UDim2.new(0, 1, 0, 1);
-		Size             = UDim2.new(1, -2, 0, 1);
-		BackgroundColor3 = Color3.fromHex("FFFFFF");
-		BorderSizePixel  = 0;
-		ZIndex           = 10;
-	});
-	Library:RegisterAccentGradient(self:CreateInstance("UIGradient", {
-		Parent = TopLine; Rotation = 0;
-	}));
-
-	local TitleLbl = self:CreateInstance("TextLabel", {
-		Parent                 = Outer;
-		Position               = UDim2.new(0, 6, 0, 9);
-		Size                   = UDim2.new(0, 200, 0, 18);
-		BackgroundTransparency = 1;
-		Text                   = Title;
-		TextColor3             = Color3.fromHex("FFFFFF");
-		TextSize               = 12;
-		TextXAlignment         = Enum.TextXAlignment.Left;
-		TextYAlignment         = Enum.TextYAlignment.Center;
-	});
-	if ProggyCleanFont then TitleLbl.FontFace = ProggyCleanFont end;
-
-	local Content = self:CreateInstance("Frame", {
-		Name             = "Content";
-		Parent           = Outer;
-		Position         = UDim2.new(0, 5, 0, 34);
-		Size             = UDim2.new(1, -10, 1, -39);
-		BackgroundColor3 = Color3.fromHex("FFFFFF");
-		BorderSizePixel  = 0;
-	});
-	self:CreateInstance("UIGradient", {
-		Parent   = Content;
-		Rotation = 90;
-		Color    = NewColorSequence({
-			NewColorSequenceKeypoint(0, Color3.fromHex("161616"));
-			NewColorSequenceKeypoint(1, Color3.fromHex("101010"));
-		});
-	});
-
-	local function ContentEdge(Anchor, Pos, Sz, Color)
-		self:CreateInstance("Frame", {
-			Parent           = Content;
-			AnchorPoint      = Anchor;
-			Position         = Pos;
-			Size             = Sz;
-			BackgroundColor3 = Color3.fromHex(Color);
-			BorderSizePixel  = 0;
-			ZIndex           = 10;
-		});
-	end;
-	ContentEdge(Vector2.new(0,0), UDim2.new(0,0,0,0),   UDim2.new(0,1,1,0),   "000000");
-	ContentEdge(Vector2.new(0,0), UDim2.new(0,1,0,1),   UDim2.new(0,1,1,-2),  "393939");
-	ContentEdge(Vector2.new(1,0), UDim2.new(1,0,0,0),   UDim2.new(0,1,1,0),   "000000");
-	ContentEdge(Vector2.new(1,0), UDim2.new(1,-1,0,1),  UDim2.new(0,1,1,-2),  "393939");
-	ContentEdge(Vector2.new(0,1), UDim2.new(0,0,1,0),   UDim2.new(1,0,0,1),   "000000");
-	ContentEdge(Vector2.new(0,1), UDim2.new(0,1,1,-1),  UDim2.new(1,-2,0,1),  "393939");
-
-	local Page = self:CreateInstance("Frame", {
-		Name                   = "Page";
-		Parent                 = Content;
-		Position               = UDim2.new(0, 2, 0, 2);
-		Size                   = UDim2.new(1, -4, 1, -4);
-		BackgroundTransparency = 1;
-		BorderSizePixel        = 0;
-	});
-	self:CreateInstance("UIPadding", {
-		Parent        = Page;
-		PaddingLeft   = UDim.new(0, 6);
-		PaddingRight  = UDim.new(0, 6);
-		PaddingTop    = UDim.new(0, 9);
-		PaddingBottom = UDim.new(0, 4);
-	});
-
-	local Column = self:CreateInstance("ScrollingFrame", {
-		Name                   = "Column";
-		Parent                 = Page;
-		Position               = UDim2.new(0, 0, 0, -2);
-		Size                   = UDim2.new(1, 0, 1, 2);
-		BackgroundTransparency = 1;
-		BorderSizePixel        = 0;
-		CanvasSize             = UDim2.new(0, 0, 0, 0);
-		AutomaticCanvasSize    = Enum.AutomaticSize.Y;
-		ScrollBarThickness     = 2;
-		ScrollBarImageColor3   = Library.Accent;
-		ScrollingDirection     = Enum.ScrollingDirection.Y;
-		ClipsDescendants       = true;
-	});
-	Library:RegisterAccent(Column, "ScrollBarImageColor3");
-	self:CreateInstance("UIListLayout", {
-		Parent        = Column;
-		FillDirection = Enum.FillDirection.Vertical;
-		SortOrder     = Enum.SortOrder.LayoutOrder;
-		Padding       = UDim.new(0, 6);
-	});
-	self:CreateInstance("UIPadding", {
-		Parent        = Column;
-		PaddingTop    = UDim.new(0, 4);
-		PaddingBottom = UDim.new(0, 6);
-	});
-
-	self:Draggable(Outer);
-
-	local Host = { Left = Column, Right = Column, Page = Page, Gui = Gui };
-
-	local FadeOriginals = nil;
-	local FadeToken = 0;
-	local ShownAt = 0;
-
-	local function CaptureFade()
-		local Map = {};
-		local Types = {
-			Frame = {"BackgroundTransparency"};
-			TextLabel = {"BackgroundTransparency","TextTransparency"};
-			TextButton = {"BackgroundTransparency","TextTransparency"};
-			TextBox = {"BackgroundTransparency","TextTransparency"};
-			ImageLabel = {"BackgroundTransparency","ImageTransparency"};
-			ImageButton = {"BackgroundTransparency","ImageTransparency"};
-			ScrollingFrame = {"BackgroundTransparency"};
-			UIStroke = {"Transparency"};
-		};
-		local function Cap(Inst)
-			local Props = Types[Inst.ClassName];
-			if not Props then return end;
-			local PMap = {};
-			for _, P in Props do
-				local Ok, V = pcall(function() return Inst[P] end);
-				if Ok then PMap[P] = V end;
-			end;
-			Map[Inst] = PMap;
-		end;
-		Cap(Outer);
-		for _, D in Outer:GetDescendants() do Cap(D) end;
-		return Map;
-	end;
-
-	local Obj = { Gui = Gui, Outer = Outer, _Visible = true };
-
-	function Obj:Section(SecOpts)
-		return BuildSection(Host, SecOpts);
-	end;
-
-	function Obj:ApplySettings()
+-- [MOBILE PATCH] shared settings contents builder: used by BOTH the legacy floating
+-- SettingsWindow (PC) and the in-window Settings tab (mobile default). Everything
+-- routes through self:Section(...), so either host can serve it unchanged.
+local function ApplySettingsContents(self)
 		local ConfigDir    = Library.Directory .. "/Configs";
 		local ThemeDir     = Library.Directory .. "/Themes";
 		local AutoLoadFile = Library.Directory .. "/Autoload.txt";
@@ -7156,6 +6958,265 @@ function Library:SettingsWindow(Opts)
 		end);
 
 		return self;
+end;
+
+-- [MOBILE PATCH] Settings as an in-window tab (LinoriaLib "UI Settings"-style).
+-- Exposes the same API as the floating SettingsWindow (Section / ApplySettings /
+-- SetVisible / SyncWithWindow / PositionNextTo / Destroy) so scripts need no changes.
+function Library:SettingsTab(Window, Opts)
+	Opts = typeof(Opts) == "table" and Opts or {};
+	Window = Window or Opts.Window or Library.CurrentlyOpen;
+	assert(Window and Window.Tab, "SettingsTab: no window to attach to");
+	local Tab = Window:Tab({ Name = tostring(Opts.TabName or Opts.Name or Opts.Title or "Settings") });
+
+	local Obj = { _Tab = Tab, _Window = Window, _Visible = true, Gui = nil, Outer = nil };
+
+	function Obj:Section(SecOpts)
+		return Tab:Section(SecOpts);
+	end;
+
+	function Obj:ApplySettings()
+		return ApplySettingsContents(self);
+	end;
+
+	-- the tab rides inside the window; "showing" it means jumping straight to it
+	function Obj:SetVisible(State)
+		self._Visible = State and true or false;
+		if State then
+			for _, T in ipairs(Window._Tabs or {}) do
+				if T ~= Tab and T.Active then T:SetActive(false) end;
+			end;
+			Tab:SetActive(true);
+		end;
+	end;
+	function Obj:SyncWithWindow(_) end; -- no-op: already inside the window
+	function Obj:PositionNextTo(_) end; -- no-op
+	function Obj:Destroy()
+		if Tab.Button then Tab.Button:Destroy() end;
+		if Tab.Page then Tab.Page:Destroy() end;
+	end;
+	Library._SettingsWindow = Obj;
+	return Obj;
+end;
+
+function Library:SettingsWindow(Opts)
+	Opts = typeof(Opts) == "table" and Opts or {};
+	-- [MOBILE PATCH] touch devices: settings live in an in-window "Settings" tab instead of
+	-- a floating window that cannot fit next to the fullscreen menu (LinoriaLib "UI Settings"
+	-- spirit). Pass Floating = true to force the legacy floating window.
+	if IsMobilePlatform and Opts.Floating ~= true then
+		local Win = Opts.Window or Library.CurrentlyOpen;
+		if Win and Win.Tab then
+			return Library:SettingsTab(Win, Opts);
+		end;
+	end;
+	local Title = tostring(Opts.Title or "Settings");
+	local Width = tonumber(Opts.Width) or 240;
+	local Height = tonumber(Opts.Height) or 400;
+	Width, Height = ClampWindowSize(Width, Height); -- [MOBILE PATCH]
+	if IsMobilePlatform then -- [MOBILE PATCH] floating fallback: never exceed the screen
+		local Cam = workspace.CurrentCamera;
+		local Vp  = (Cam and Cam.ViewportSize) or Vector2.new(800, 600);
+		Width  = math.min(Width, math.max(math.floor(Vp.X) - 10, 200));
+		Height = math.clamp(math.floor(Vp.Y) - 35, 200, 600);
+	end;
+
+	local Gui = self:CreateInstance("ScreenGui", {
+		Name           = "SettingsGui";
+		Parent         = (gethui and gethui()) or CoreGui;
+		IgnoreGuiInset = true;
+		ResetOnSpawn   = false;
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
+	});
+
+	local Outer = self:CreateInstance("Frame", {
+		Name             = "Outer";
+		Parent           = Gui;
+		AnchorPoint      = Vector2.new(1, 0);
+		Position         = UDim2.fromOffset(0, 0);
+		Size             = UDim2.fromOffset(Width, Height);
+		BackgroundColor3 = Color3.fromHex("FFFFFF");
+		BorderSizePixel  = 0;
+	});
+	Library:AddGlowingV2(Outer,Library.Accent,0.4)
+
+	self:CreateInstance("UIGradient", {
+		Parent   = Outer;
+		Rotation = 90;
+		Color    = NewColorSequence({
+			NewColorSequenceKeypoint(0, Color3.fromHex("212121"));
+			NewColorSequenceKeypoint(1, Color3.fromHex("1A1A1A"));
+		});
+	});
+	self:CreateInstance("UIStroke", {
+		Parent          = Outer;
+		Color           = Color3.fromHex("000000");
+		Thickness       = 1;
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+		LineJoinMode    = Enum.LineJoinMode.Miter;
+	});
+
+	local InnerOutline = self:CreateInstance("Frame", {
+		Parent                 = Outer;
+		Position               = UDim2.new(0, 1, 0, 1);
+		Size                   = UDim2.new(1, -2, 1, -2);
+		BackgroundTransparency = 1;
+		BorderSizePixel        = 0;
+	});
+	self:CreateInstance("UIStroke", {
+		Parent          = InnerOutline;
+		Color           = Color3.fromHex("393939");
+		Thickness       = 1;
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+		LineJoinMode    = Enum.LineJoinMode.Miter;
+	});
+
+	local TopLine = self:CreateInstance("Frame", {
+		Parent           = Outer;
+		Position         = UDim2.new(0, 1, 0, 1);
+		Size             = UDim2.new(1, -2, 0, 1);
+		BackgroundColor3 = Color3.fromHex("FFFFFF");
+		BorderSizePixel  = 0;
+		ZIndex           = 10;
+	});
+	Library:RegisterAccentGradient(self:CreateInstance("UIGradient", {
+		Parent = TopLine; Rotation = 0;
+	}));
+
+	local TitleLbl = self:CreateInstance("TextLabel", {
+		Parent                 = Outer;
+		Position               = UDim2.new(0, 6, 0, 9);
+		Size                   = UDim2.new(0, 200, 0, 18);
+		BackgroundTransparency = 1;
+		Text                   = Title;
+		TextColor3             = Color3.fromHex("FFFFFF");
+		TextSize               = 12;
+		TextXAlignment         = Enum.TextXAlignment.Left;
+		TextYAlignment         = Enum.TextYAlignment.Center;
+	});
+	if ProggyCleanFont then TitleLbl.FontFace = ProggyCleanFont end;
+
+	local Content = self:CreateInstance("Frame", {
+		Name             = "Content";
+		Parent           = Outer;
+		Position         = UDim2.new(0, 5, 0, 34);
+		Size             = UDim2.new(1, -10, 1, -39);
+		BackgroundColor3 = Color3.fromHex("FFFFFF");
+		BorderSizePixel  = 0;
+	});
+	self:CreateInstance("UIGradient", {
+		Parent   = Content;
+		Rotation = 90;
+		Color    = NewColorSequence({
+			NewColorSequenceKeypoint(0, Color3.fromHex("161616"));
+			NewColorSequenceKeypoint(1, Color3.fromHex("101010"));
+		});
+	});
+
+	local function ContentEdge(Anchor, Pos, Sz, Color)
+		self:CreateInstance("Frame", {
+			Parent           = Content;
+			AnchorPoint      = Anchor;
+			Position         = Pos;
+			Size             = Sz;
+			BackgroundColor3 = Color3.fromHex(Color);
+			BorderSizePixel  = 0;
+			ZIndex           = 10;
+		});
+	end;
+	ContentEdge(Vector2.new(0,0), UDim2.new(0,0,0,0),   UDim2.new(0,1,1,0),   "000000");
+	ContentEdge(Vector2.new(0,0), UDim2.new(0,1,0,1),   UDim2.new(0,1,1,-2),  "393939");
+	ContentEdge(Vector2.new(1,0), UDim2.new(1,0,0,0),   UDim2.new(0,1,1,0),   "000000");
+	ContentEdge(Vector2.new(1,0), UDim2.new(1,-1,0,1),  UDim2.new(0,1,1,-2),  "393939");
+	ContentEdge(Vector2.new(0,1), UDim2.new(0,0,1,0),   UDim2.new(1,0,0,1),   "000000");
+	ContentEdge(Vector2.new(0,1), UDim2.new(0,1,1,-1),  UDim2.new(1,-2,0,1),  "393939");
+
+	local Page = self:CreateInstance("Frame", {
+		Name                   = "Page";
+		Parent                 = Content;
+		Position               = UDim2.new(0, 2, 0, 2);
+		Size                   = UDim2.new(1, -4, 1, -4);
+		BackgroundTransparency = 1;
+		BorderSizePixel        = 0;
+	});
+	self:CreateInstance("UIPadding", {
+		Parent        = Page;
+		PaddingLeft   = UDim.new(0, 6);
+		PaddingRight  = UDim.new(0, 6);
+		PaddingTop    = UDim.new(0, 9);
+		PaddingBottom = UDim.new(0, 4);
+	});
+
+	local Column = self:CreateInstance("ScrollingFrame", {
+		Name                   = "Column";
+		Parent                 = Page;
+		Position               = UDim2.new(0, 0, 0, -2);
+		Size                   = UDim2.new(1, 0, 1, 2);
+		BackgroundTransparency = 1;
+		BorderSizePixel        = 0;
+		CanvasSize             = UDim2.new(0, 0, 0, 0);
+		AutomaticCanvasSize    = Enum.AutomaticSize.Y;
+		ScrollBarThickness     = 2;
+		ScrollBarImageColor3   = Library.Accent;
+		ScrollingDirection     = Enum.ScrollingDirection.Y;
+		ClipsDescendants       = true;
+	});
+	Library:RegisterAccent(Column, "ScrollBarImageColor3");
+	self:CreateInstance("UIListLayout", {
+		Parent        = Column;
+		FillDirection = Enum.FillDirection.Vertical;
+		SortOrder     = Enum.SortOrder.LayoutOrder;
+		Padding       = UDim.new(0, 6);
+	});
+	self:CreateInstance("UIPadding", {
+		Parent        = Column;
+		PaddingTop    = UDim.new(0, 4);
+		PaddingBottom = UDim.new(0, 6);
+	});
+
+	self:Draggable(Outer);
+
+	local Host = { Left = Column, Right = Column, Page = Page, Gui = Gui };
+
+	local FadeOriginals = nil;
+	local FadeToken = 0;
+	local ShownAt = 0;
+
+	local function CaptureFade()
+		local Map = {};
+		local Types = {
+			Frame = {"BackgroundTransparency"};
+			TextLabel = {"BackgroundTransparency","TextTransparency"};
+			TextButton = {"BackgroundTransparency","TextTransparency"};
+			TextBox = {"BackgroundTransparency","TextTransparency"};
+			ImageLabel = {"BackgroundTransparency","ImageTransparency"};
+			ImageButton = {"BackgroundTransparency","ImageTransparency"};
+			ScrollingFrame = {"BackgroundTransparency"};
+			UIStroke = {"Transparency"};
+		};
+		local function Cap(Inst)
+			local Props = Types[Inst.ClassName];
+			if not Props then return end;
+			local PMap = {};
+			for _, P in Props do
+				local Ok, V = pcall(function() return Inst[P] end);
+				if Ok then PMap[P] = V end;
+			end;
+			Map[Inst] = PMap;
+		end;
+		Cap(Outer);
+		for _, D in Outer:GetDescendants() do Cap(D) end;
+		return Map;
+	end;
+
+	local Obj = { Gui = Gui, Outer = Outer, _Visible = true };
+
+	function Obj:Section(SecOpts)
+		return BuildSection(Host, SecOpts);
+	end;
+
+	function Obj:ApplySettings()
+		return ApplySettingsContents(self);
 	end;
 
 	function Obj:SetVisible(State)
@@ -7868,6 +7929,15 @@ function Library:PreviewWindow(Opts)
 	local Width  = tonumber(Opts.Width) or 240;
 	local Height = tonumber(Opts.Height) or 320;
 	Width, Height = ClampWindowSize(Width, Height); -- [MOBILE PATCH]
+	-- [MOBILE PATCH] touch devices: keep the preview compact and fully on-screen
+	local MobilePos = nil;
+	if IsMobilePlatform then
+		local Cam = workspace.CurrentCamera;
+		local Vp  = (Cam and Cam.ViewportSize) or Vector2.new(800, 600);
+		Width  = math.min(Width,  math.max(math.floor(Vp.X) - 24, 160));
+		Height = math.min(Height, math.max(math.floor(Vp.Y) - 90, 160));
+		MobilePos = UDim2.new(1, -(Width + 8), 0, 38); -- dock top-right, draggable from there
+	end;
 
 	local Gui = self:CreateInstance("ScreenGui", {
 		Name           = "PreviewGui";
@@ -7880,7 +7950,7 @@ function Library:PreviewWindow(Opts)
 	local Outer = self:CreateInstance("Frame", {
 		Name             = "Outer";
 		Parent           = Gui;
-		Position         = UDim2.fromOffset(0, 0);
+		Position         = MobilePos or UDim2.fromOffset(0, 0); -- [MOBILE PATCH]
 		Size             = UDim2.fromOffset(Width, Height);
 		BackgroundColor3 = Color3.fromHex("FFFFFF");
 		BorderSizePixel  = 0;
@@ -7983,6 +8053,12 @@ function Library:PreviewWindow(Opts)
 
 	local Obj = { Gui = Gui, Outer = Outer, Preview = Core, _Visible = true };
 
+	-- [MOBILE PATCH] tab-bound visibility state: the preview should only exist while the
+	-- menu is open AND the bound tab (default "Visual") is the active one
+	Obj._BoundWindow  = nil;
+	Obj._BoundTab     = nil; -- lowercase needle matched against tab names
+	Obj._SyncedWindow = nil;
+
 	function Obj:SetVisible(State)
 		if self._Visible == State then return end;
 		self._Visible = State;
@@ -8024,17 +8100,78 @@ function Library:PreviewWindow(Opts)
 		end;
 	end;
 
+	-- [MOBILE PATCH] does the window's active tab match the bound needle?
+	-- (if no tab name matches at all, or nothing is selected yet, stay visible —
+	--  never let the preview vanish unexpectedly)
+	local function MatchesBoundTab(W, Needle)
+		local Tabs = W and W._Tabs;
+		if not Tabs then return true end;
+		local AnyName, ActiveHit, AnyActive = false, false, false;
+		for _, T in ipairs(Tabs) do
+			if T.Active then AnyActive = true end;
+			if string.find(string.lower(T.Name), Needle, 1, true) then
+				AnyName = true;
+				if T.Active then ActiveHit = true end;
+			end;
+		end;
+		if not AnyName then return true end;
+		if not AnyActive then return true end;
+		return ActiveHit;
+	end;
+
+	function Obj:_RefreshBinding()
+		local W = self._BoundWindow;
+		if not W then return end;
+		local Target = W.Visible == true;
+		if Target and self._BoundTab then
+			Target = MatchesBoundTab(W, self._BoundTab);
+		end;
+		self:SetVisible(Target);
+	end;
+
 	function Obj:SyncWithWindow(Window)
+		self._BoundWindow = Window; -- [MOBILE PATCH] remember for tab-bound refresh
+		if self._SyncedWindow == Window then self:_RefreshBinding(); return end;
+		self._SyncedWindow = Window;
 		local OrigSetVisible = Window.SetVisible;
 		Window.SetVisible = function(Win, State)
 			OrigSetVisible(Win, State);
-			self:SetVisible(State);
+			self:_RefreshBinding();
 		end;
 		local OrigToggle = Window.Toggle;
 		Window.Toggle = function(Win)
 			OrigToggle(Win);
-			self:SetVisible(Win.Visible);
+			self:_RefreshBinding();
 		end;
+		task.defer(function() self:_RefreshBinding() end);
+	end;
+
+	-- [MOBILE PATCH] bind the preview's visibility to a tab: it only shows while
+	-- Window is open and that tab is active (hooks existing and future tabs)
+	function Obj:SyncWithTab(Window, TabName)
+		if not (Window and Window._Tabs) then return end;
+		self._BoundTab = string.lower(tostring(TabName or "Visual"));
+		local function HookTab(T)
+			if T._PreviewHooked then return end;
+			T._PreviewHooked = true;
+			local Orig = T.SetActive;
+			T.SetActive = function(Self, State)
+				Orig(Self, State);
+				task.defer(function() Obj:_RefreshBinding() end);
+			end;
+		end;
+		for _, T in ipairs(Window._Tabs) do HookTab(T) end;
+		if not Window._PreviewTabHook then
+			Window._PreviewTabHook = true;
+			local OrigTab = Window.Tab;
+			Window.Tab = function(W, ...)
+				local T = OrigTab(W, ...);
+				HookTab(T);
+				return T;
+			end;
+		end;
+		self:SyncWithWindow(Window);
+		self:_RefreshBinding();
 	end;
 
 	function Obj:PositionNextTo(Window)
@@ -8049,6 +8186,25 @@ function Library:PreviewWindow(Opts)
 		task.defer(UpdatePos);
 		WinOuter:GetPropertyChangedSignal("AbsolutePosition"):Connect(UpdatePos);
 		WinOuter:GetPropertyChangedSignal("AbsoluteSize"):Connect(UpdatePos);
+	end;
+
+	-- [MOBILE PATCH] default: only show while the "Visual" tab is open.
+	-- Override with BindTab = "TabName"; BindTab = false keeps legacy always-visible.
+	if Opts.BindTab ~= false then
+		local BindName = Opts.BindTab or Opts.Tab or "Visual";
+		local function TryBind()
+			local Win = Opts.Window or Library.CurrentlyOpen;
+			if Win and Win._Tabs then Obj:SyncWithTab(Win, BindName); return true end;
+			return false;
+		end;
+		if not TryBind() then
+			task.spawn(function() -- window may be created after the preview: retry briefly
+				for _ = 1, 50 do
+					task.wait(0.1);
+					if TryBind() then return end;
+				end;
+			end);
+		end;
 	end;
 
 	function Obj:Get(...) return Core:Get(...) end;
