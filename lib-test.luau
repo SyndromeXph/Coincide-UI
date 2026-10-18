@@ -1200,9 +1200,7 @@ local function BuildSection(Host, SecOpts)
 	SecOpts = typeof(SecOpts) == "table" and SecOpts or { Name = tostring(SecOpts) };
 	local SecName = tostring(SecOpts.Name or SecOpts.Title or "section");
 	local Side    = string.lower(tostring(SecOpts.Side or "Left"));
-	-- [MOBILE PATCH] single-column layout on touch: every section lands in the
-	-- full-width Left column regardless of Side (Right column is hidden)
-	local Column  = (Side == "right" and not IsMobilePlatform) and Host.Right or Host.Left;
+	local Column  = (Side == "right") and Host.Right or Host.Left;
 
 	Library:Log("Added section "..SecName)
 
@@ -5311,13 +5309,6 @@ Title.Position = UDim2.new(0, 5 + TitleLogo.AbsoluteSize.X + 4, 0, 9);
 		end;
 		BindScrollDragGuard(LeftColumn);
 		BindScrollDragGuard(RightColumn);
-
-		-- [MOBILE PATCH] single-column layout on touch: Left spans the full page
-		-- width, Right is hidden (BuildSection routes every section into Left)
-		if IsMobilePlatform then
-			LeftColumn.Size = UDim2.new(1, 0, 1, 2);
-			RightColumn.Visible = false;
-		end;
 
 		local TabRef = {
 			Name        = TabName;
@@ -9985,10 +9976,9 @@ function Library:InvViewer(Opts)
 end;
 
 --============================================================
--- [MOBILE PATCH] Mobile support layer (v5)
+-- [MOBILE PATCH] Mobile support layer (v6)
 --  - PC / mobile auto-detect  (Library.IsMobile)
---  - fit-to-screen UI scaling (auto; override via SetDPIScale / SetUIScale)
---  - single-column tab layout on touch
+--  - fill-the-screen scaling  (auto; override via SetDPIScale / SetUIScale)
 --  - floating buttons         (LinoriaLib-style "Toggle UI" / "Lock UI" pills)
 --  - ghost-outline touch drag + CanDrag guards (Unnamed-style)
 --  - on-screen keyboard avoidance for TextBoxes
@@ -10026,14 +10016,15 @@ do
 		local Cam = Workspace.CurrentCamera;
 		if not Cam then return 1 end;
 		local Vp = Cam.ViewportSize;
-		-- [MOBILE PATCH] fit-to-screen: scale the reference menu (~550x555, rendered
-		-- single-column on touch) so the WHOLE window lands inside the viewport
-		-- with margins. 0.5 floor keeps it legible; tablets stay at 1.0. Users can
-		-- still enlarge via UI Scale / SetDPIScale and pan with drags.
+		-- [MOBILE PATCH] fill-the-screen: scale the reference menu (~550x555) so it
+		-- exactly fills the viewport (margins + topbar inset respected). On high-res
+		-- phones this ENLARGES the UI (e.g. ~183% on 2400x1080) for big readable
+		-- controls like LinoriaLib's mobile screenshots; on small screens it shrinks
+		-- to fit (0.5 floor). Users can override via UI Scale / SetDPIScale.
 		local RefW, RefH, Margin = 550, 555, 14;
 		local AvailW = math.max(Vp.X - Margin * 2, 200);
 		local AvailH = math.max(Vp.Y - Margin * 2 - GuiInset, 200);
-		return math.clamp(math.min(AvailW / RefW, AvailH / RefH), 0.5, 1);
+		return math.clamp(math.min(AvailW / RefW, AvailH / RefH), 0.5, 2);
 	end;
 
 	function Library:SetUIScale(N)
