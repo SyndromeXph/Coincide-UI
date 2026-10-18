@@ -42,14 +42,10 @@ local MobileUIScaleValue = 1; -- [MOBILE PATCH] mirrors Library._UIScaleValue (f
 
 local function ClampWindowSize(Width, Height)
 	if not IsMobilePlatform then return Width, Height end;
-	local Cam = Workspace.CurrentCamera;
-	local Vp = Cam and Cam.ViewportSize or Vector2.new(800, 600);
-	-- clamp the *rendered* size: unscaled units -> divide by the UI scale
-	-- height also respects the topbar inset so the menu never sits under it
-	-- floor 200 matches LinoriaLib's mobile MinSize (550x200): flatter menus allowed
-	local MaxW = math.max((Vp.X - 16) / MobileUIScaleValue, 200);
-	local MaxH = math.max((Vp.Y - 16 - GuiInset) / MobileUIScaleValue, 200);
-	return math.min(Width, MaxW), math.min(Height, MaxH);
+	-- [MOBILE PATCH] LinoriaLib-style: do NOT shrink windows to fit the screen.
+	-- The UI is enlarged on touch and oversized windows are panned by dragging
+	-- (whole window = drag handle); only cap truly absurd sizes as a sanity check.
+	return math.min(Width, 1600), math.min(Height, 1600);
 end;
 
 local NewColorSequence = ColorSequence.new;
@@ -727,7 +723,7 @@ function Library:Draggable(TargetFrame, DragHandle, IgnoreLock)
 			local Tx = StartPosition.X.Scale * Ps.X + NewX * S - Ap.X * Ts.X;
 			local Ty = StartPosition.Y.Scale * Ps.Y + NewY * S - Ap.Y * Ts.Y;
 			Tx = math.clamp(Tx, -(Ts.X - Margin), math.max(Ps.X - Margin, 0));
-			Ty = math.clamp(Ty, 0, math.max(Ps.Y - Margin, 0));
+			Ty = math.clamp(Ty, -(Ts.Y - Margin), math.max(Ps.Y - Margin, 0)); -- [MOBILE PATCH] negative allowed: pan oversized windows
 			NewX = (Tx + Ap.X * Ts.X - StartPosition.X.Scale * Ps.X) / S;
 			NewY = (Ty + Ap.Y * Ts.Y - StartPosition.Y.Scale * Ps.Y) / S;
 		end;
@@ -756,7 +752,7 @@ function Library:Draggable(TargetFrame, DragHandle, IgnoreLock)
 			local Tx = GhostStart.X.Scale * Ps.X + NewX - Ap.X * Ts.X;
 			local Ty = GhostStart.Y.Scale * Ps.Y + NewY - Ap.Y * Ts.Y;
 			Tx = math.clamp(Tx, -(Ts.X - Margin), math.max(Ps.X - Margin, 0));
-			Ty = math.clamp(Ty, 0, math.max(Ps.Y - Margin, 0));
+			Ty = math.clamp(Ty, -(Ts.Y - Margin), math.max(Ps.Y - Margin, 0)); -- [MOBILE PATCH] negative allowed: pan oversized windows
 			NewX = Tx + Ap.X * Ts.X - GhostStart.X.Scale * Ps.X;
 			NewY = Ty + Ap.Y * Ts.Y - GhostStart.Y.Scale * Ps.Y;
 		end;
@@ -6982,10 +6978,10 @@ function Library:SettingsWindow(Opts)
 		-- [MOBILE PATCH] touch-device controls: UI scale, lite mode, floating button
 		SecMenu:Slider({
 			Name = "UI Scale"; Flag = "MobileUIScale";
-			Min = 0.5; Max = 1.5; Step = 0.05; Decimals = 2;
-			Default = Library._UIScaleValue or 1;
-			Tooltip = "Scales the whole menu (mainly for touch devices)";
-			Callback = function(V) Library:SetUIScale(V) end;
+			Min = 50; Max = 200; Step = 5; Decimals = 0; Suffix = "%";
+			Default = math.floor((Library._UIScaleValue or 1) * 100 + 0.5);
+			Tooltip = "Enlarges the whole menu (LinoriaLib SetDPIScale equivalent)";
+			Callback = function(V) Library:SetDPIScale(V) end;
 		});
 		SecMenu:Button({
 			Name = "Auto UI Scale";
@@ -9980,12 +9976,13 @@ function Library:InvViewer(Opts)
 end;
 
 --============================================================
--- [MOBILE PATCH] Mobile support layer (v3)
+-- [MOBILE PATCH] Mobile support layer (v4)
 --  - PC / mobile auto-detect  (Library.IsMobile)
---  - whole-UI scaling         (Library:SetUIScale / auto fit on phones)
+--  - whole-UI ENLARGEMENT     (Library:SetDPIScale / SetUIScale / auto enlarge on phones)
 --  - floating buttons         (LinoriaLib-style "Toggle UI" / "Lock UI" pills)
+--  - ghost-outline touch drag + CanDrag guards (Unnamed-style)
 --  - on-screen keyboard avoidance for TextBoxes
---  - keeps every window inside the viewport on rotation
+--  - keeps every window reachable on rotation
 --============================================================
 Library.IsMobile = IsMobilePlatform;
 Library._ReduceAnimations = false;
@@ -10016,23 +10013,28 @@ do
 
 	local function ComputeAutoScale()
 		if not Library.IsMobile then return 1 end;
+		-- [MOBILE PATCH] LinoriaLib DPI philosophy on touch: ENLARGE the UI for
+		-- readability and finger-sized targets instead of shrinking it to fit.
+		-- Oversized windows are panned by dragging (the whole window is the
+		-- handle) and can be flattened to MinHeight 200. Tablets (bigger
+		-- viewports) get less boost than phones.
 		local Cam = Workspace.CurrentCamera;
-		if not Cam then return 1 end;
-		local Vp = Cam.ViewportSize;
-		-- fit the reference menu (~550x555) inside the viewport with margins;
-		-- the 0.6 floor keeps touch targets tappable, ClampWindowSize shrinks
-		-- the window itself on extra-small screens (LinoriaLib-style DPI floor)
-		local RefW, RefH, Margin = 550, 555, 28;
-		local AvailW = math.max(Vp.X - Margin * 2, 200);
-		local AvailH = math.max(Vp.Y - Margin * 2 - GuiInset, 200);
-		return math.clamp(math.min(AvailW / RefW, AvailH / RefH, 1), 0.6, 1);
+		if not Cam then return 1.3 end;
+		local Short = math.min(Cam.ViewportSize.X, Cam.ViewportSize.Y);
+		return math.clamp(500 / math.max(Short, 1), 1.05, 1.5);
 	end;
 
 	function Library:SetUIScale(N)
 		N = tonumber(N) or 1;
 		Library._UIScaleAuto  = false;
-		Library._UIScaleValue = math.clamp(N, 0.4, 1.5);
+		Library._UIScaleValue = math.clamp(N, 0.4, 2);
 		ApplyScale(Library._UIScaleValue);
+	end;
+
+	-- [MOBILE PATCH] LinoriaLib-compatible percent-based scaling: SetDPIScale(130) = 1.3x
+	function Library:SetDPIScale(V)
+		V = tonumber(V) or 100;
+		Library:SetUIScale(V / 100);
 	end;
 
 	function Library:SetAutoUIScale()
@@ -10132,7 +10134,14 @@ do
 		local Tx = Frame.Position.X.Scale * Ps.X + Frame.Position.X.Offset * S - Ap.X * Ts.X;
 		local Ty = Frame.Position.Y.Scale * Ps.Y + Frame.Position.Y.Offset * S - Ap.Y * Ts.Y;
 		local Nx = math.clamp(Tx, -(Ts.X - Margin), math.max(Ps.X - Margin, 0));
-		local Ny = math.clamp(Ty, 0, math.max(Ps.Y - Margin, 0));
+		local Ny;
+		if Ts.Y > Ps.Y then
+			-- [MOBILE PATCH] window taller than the screen (enlarged UI): pin its
+			-- top edge to the screen top so the title area stays grabbable
+			Ny = math.clamp(Ty, -(Ts.Y - Margin), 0);
+		else
+			Ny = math.clamp(Ty, 0, math.max(Ps.Y - Margin, 0));
+		end;
 		if Nx ~= Tx or Ny ~= Ty then
 			Frame.Position = UDim2.new(
 				Frame.Position.X.Scale, (Nx + Ap.X * Ts.X - Frame.Position.X.Scale * Ps.X) / S,
