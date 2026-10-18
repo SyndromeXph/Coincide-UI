@@ -8,14 +8,15 @@ local GuiService = game:GetService("GuiService");
 local RunService = game:GetService("RunService");
 local CoreGui = game:GetService("CoreGui");
 local TweenService = game:GetService("TweenService");
+local HapticService = game:GetService("HapticService"); -- [MOBILE PATCH] tap feedback
 
 local GuiInset = GuiService:GetGuiInset().Y;
 
 -- [MOBILE PATCH] platform detection + size clamping helper
 -- PC / mobile auto-detection:
 --   1) getgenv().CoincideMobile = true/false  -> manual override (set BEFORE loadstring)
---   2) no touch at all                        -> PC
---   3) touch but no keyboard                  -> mobile / tablet
+--   2) GetPlatform() = Android / iOS          -> mobile (LinoriaLib-style, most reliable)
+--   3) touch but no mouse / no keyboard       -> mobile / tablet
 --   4) touch + keyboard + small screen        -> small-screen device, treat as mobile
 --   5) touch + keyboard + large screen        -> PC (2-in-1 laptop etc.)
 local IsMobilePlatform = (function()
@@ -25,8 +26,13 @@ local IsMobilePlatform = (function()
 			return Env.CoincideMobile and true or false;
 		end;
 	end;
+	-- LinoriaLib-style: trust the reported device platform first
+	local OkPlat, Plat = pcall(function() return UserInputService:GetPlatform() end);
+	if OkPlat and (Plat == Enum.Platform.Android or Plat == Enum.Platform.IOS) then
+		return true;
+	end;
 	if not UserInputService.TouchEnabled then return false end;
-	if not UserInputService.KeyboardEnabled then return true end;
+	if not UserInputService.MouseEnabled or not UserInputService.KeyboardEnabled then return true end;
 	local Cam = Workspace.CurrentCamera;
 	local Vp = Cam and Cam.ViewportSize or Vector2.new(800, 600);
 	return math.min(Vp.X, Vp.Y) < 500;
@@ -39,8 +45,9 @@ local function ClampWindowSize(Width, Height)
 	local Cam = Workspace.CurrentCamera;
 	local Vp = Cam and Cam.ViewportSize or Vector2.new(800, 600);
 	-- clamp the *rendered* size: unscaled units -> divide by the UI scale
+	-- height also respects the topbar inset so the menu never sits under it
 	local MaxW = math.max((Vp.X - 16) / MobileUIScaleValue, 220);
-	local MaxH = math.max((Vp.Y - 16) / MobileUIScaleValue, 220);
+	local MaxH = math.max((Vp.Y - 16 - GuiInset) / MobileUIScaleValue, 220);
 	return math.min(Width, MaxW), math.min(Height, MaxH);
 end;
 
@@ -4899,7 +4906,10 @@ function Library:Window(Opts)
 		BackgroundTransparency = 1;
 		BorderSizePixel = 0;
 	});
-	--Library:AddGlowingV2(InnerOutline,Library.Accent,0.4)
+	-- [MOBILE PATCH] soft shadows behind the window: black depth + a whisper of accent
+	-- (UIShadow is unsupported on some clients -> pcall makes it a safe no-op)
+	pcall(function() Library:AddGlowingV2(Outer, Color3.fromHex("000000"), 0.55) end);
+	pcall(function() Library:AddGlowingV2(Outer, Library.Accent, 0.86) end);
 	self:CreateInstance("UIStroke", {
 		Parent          = InnerOutline;
 		Color           = Color3.fromHex("393939");
@@ -5137,10 +5147,11 @@ Title.Position = UDim2.new(0, 5 + TitleLogo.AbsoluteSize.X + 4, 0, 9);
 			BorderSizePixel        = 0;
 			CanvasSize             = UDim2.new(0, 0, 0, 0);
 			AutomaticCanvasSize    = Enum.AutomaticSize.Y;
-			ScrollBarThickness     = 0;
+			ScrollBarThickness     = IsMobilePlatform and 3 or 0; -- [MOBILE PATCH] visible scrollbar on touch
 			ScrollingDirection     = Enum.ScrollingDirection.Y;
 			ClipsDescendants       = true;
 		});
+		Library:RegisterAccent(LeftColumn, "ScrollBarImageColor3"); -- [MOBILE PATCH] accent-tinted scrollbar
 		Library:CreateInstance("UIListLayout", {
 			Parent        = LeftColumn;
 			FillDirection = Enum.FillDirection.Vertical;
@@ -5163,10 +5174,11 @@ Title.Position = UDim2.new(0, 5 + TitleLogo.AbsoluteSize.X + 4, 0, 9);
 			BorderSizePixel        = 0;
 			CanvasSize             = UDim2.new(0, 0, 0, 0);
 			AutomaticCanvasSize    = Enum.AutomaticSize.Y;
-			ScrollBarThickness     = 0;
+			ScrollBarThickness     = IsMobilePlatform and 3 or 0; -- [MOBILE PATCH] visible scrollbar on touch
 			ScrollingDirection     = Enum.ScrollingDirection.Y;
 			ClipsDescendants       = true;
 		});
+		Library:RegisterAccent(RightColumn, "ScrollBarImageColor3"); -- [MOBILE PATCH] accent-tinted scrollbar
 		Library:CreateInstance("UIListLayout", {
 			Parent        = RightColumn;
 			FillDirection = Enum.FillDirection.Vertical;
@@ -6836,6 +6848,41 @@ function Library:SettingsWindow(Opts)
 			Callback = function(V) Library.AnimationSpeed = V end;
 		});
 		SecMenu:Slider({ Name = "Dragging Speed", Flag = "DraggingSpeed", Min = 0, Max = 2, Step = 0.05, Decimals = 2, Default = 0.05 });
+		-- [MOBILE PATCH] touch-device controls: UI scale, lite mode, floating button
+		SecMenu:Slider({
+			Name = "UI Scale"; Flag = "MobileUIScale";
+			Min = 0.5; Max = 1.5; Step = 0.05; Decimals = 2;
+			Default = Library._UIScaleValue or 1;
+			Tooltip = "Scales the whole menu (mainly for touch devices)";
+			Callback = function(V) Library:SetUIScale(V) end;
+		});
+		SecMenu:Button({
+			Name = "Auto UI Scale";
+			Tooltip = "Fit the menu to the screen automatically";
+			Callback = function()
+				Library:SetAutoUIScale();
+				Library:Notify("UI scale: auto", 2);
+			end;
+		});
+		SecMenu:Toggle({
+			Name = "Lite Animations"; Flag = "MobileLiteAnim";
+			Default = Library._ReduceAnimations == true;
+			Tooltip = "Disables heavy animations; recommended on phones";
+			Callback = function(S) Library:SetReduceAnimations(S) end;
+		});
+		SecMenu:Toggle({
+			Name = "Floating Menu Button"; Flag = "MobileMenuBtn";
+			Default = Library.MobileMenuButton ~= nil;
+			Tooltip = "Shows the draggable on-screen menu button";
+			Callback = function(S)
+				if S then
+					local B = Library.CreateMobileMenuButton and Library:CreateMobileMenuButton();
+					if B then B:Show() end;
+				elseif Library.MobileMenuButton then
+					Library.MobileMenuButton:Hide();
+				end;
+			end;
+		});
 		SecMenu:Keybind({
 			Name     = "Menu Keybind";
 			Default  = Enum.KeyCode.RightShift;
@@ -9838,8 +9885,13 @@ do
 		local Cam = Workspace.CurrentCamera;
 		if not Cam then return 1 end;
 		local Vp = Cam.ViewportSize;
-		-- design baseline ~880x620; shrink proportionally on smaller screens
-		return math.clamp(math.min(Vp.X / 880, Vp.Y / 620), 0.55, 1);
+		-- fit the reference menu (~550x555) inside the viewport with margins;
+		-- the 0.6 floor keeps touch targets tappable, ClampWindowSize shrinks
+		-- the window itself on extra-small screens (LinoriaLib-style DPI floor)
+		local RefW, RefH, Margin = 550, 555, 28;
+		local AvailW = math.max(Vp.X - Margin * 2, 200);
+		local AvailH = math.max(Vp.Y - Margin * 2 - GuiInset, 200);
+		return math.clamp(math.min(AvailW / RefW, AvailH / RefH, 1), 0.6, 1);
 	end;
 
 	function Library:SetUIScale(N)
@@ -9996,13 +10048,18 @@ do
 			ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
 		});
 
+		-- adaptive touch target: ~1/7 of the short screen edge, clamped 48-60px
+		local Cam0 = Workspace.CurrentCamera;
+		local Vp0 = Cam0 and Cam0.ViewportSize or Vector2.new(800, 600);
+		local BtnSize = math.clamp(math.floor(math.min(Vp0.X, Vp0.Y) / 7), 48, 60);
+
 		local Btn = OrigCreateInstance(Library, "TextButton", {
 			Name                   = "Button";
 			Parent                 = BtnGui;
 			AnchorPoint            = Vector2.new(1, 0.5);
 			Position               = UDim2.new(1, -12, 0.5, 0);
-			Size                   = UDim2.fromOffset(50, 50);
-			BackgroundColor3       = Color3.fromHex("141414");
+			Size                   = UDim2.fromOffset(BtnSize, BtnSize);
+			BackgroundColor3       = Color3.fromHex("FFFFFF");
 			BackgroundTransparency = 0.08;
 			BorderSizePixel        = 0;
 			Text                   = "";
@@ -10010,6 +10067,26 @@ do
 			ZIndex                 = 100;
 		});
 		OrigCreateInstance(Library, "UICorner", { Parent = Btn; CornerRadius = UDim.new(1, 0) });
+
+		-- vertical gradient gives the circle depth (vitremake-style shading)
+		local BtnGradient = OrigCreateInstance(Library, "UIGradient", {
+			Parent   = Btn;
+			Rotation = 90;
+			Color    = NewColorSequence({
+				NewColorSequenceKeypoint(0, Color3.fromHex("1C1C1E"));
+				NewColorSequenceKeypoint(1, Color3.fromHex("101012"));
+			});
+		});
+
+		-- faint inner highlight ring (double-stroke trick, negative BorderOffset)
+		OrigCreateInstance(Library, "UIStroke", {
+			Parent          = Btn;
+			Thickness       = 1;
+			Color           = Color3.fromHex("3A3A40");
+			Transparency    = 0.45;
+			ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+			BorderOffset    = UDim.new(0, -1);
+		});
 
 		-- accent ring
 		local Ring = OrigCreateInstance(Library, "UIStroke", {
@@ -10024,6 +10101,7 @@ do
 		pcall(function() Library:AddGlowingV2(Btn, Library.Accent, 0.75) end);
 
 		-- logo (falls back to a text glyph if the asset is unavailable)
+		local LogoSize = math.floor(BtnSize * 0.6);
 		local LogoOk, LogoAsset = pcall(function() return getcustomasset("Hydrogen/logo2.png") end);
 		if LogoOk and LogoAsset and typeof(LogoAsset) == "string" and #LogoAsset > 0 then
 			OrigCreateInstance(Library, "ImageLabel", {
@@ -10031,7 +10109,7 @@ do
 				Parent               = Btn;
 				AnchorPoint          = Vector2.new(0.5, 0.5);
 				Position             = UDim2.new(0.5, 0, 0.5, 0);
-				Size                 = UDim2.fromOffset(30, 30);
+				Size                 = UDim2.fromOffset(LogoSize, LogoSize);
 				BackgroundTransparency = 1;
 				Image                = LogoAsset;
 				ZIndex               = 101;
@@ -10042,11 +10120,11 @@ do
 				Parent               = Btn;
 				AnchorPoint          = Vector2.new(0.5, 0.5);
 				Position             = UDim2.new(0.5, 0, 0.5, 0);
-				Size                 = UDim2.fromOffset(30, 30);
+				Size                 = UDim2.fromOffset(LogoSize, LogoSize);
 				BackgroundTransparency = 1;
 				Text                 = "C";
 				TextColor3           = Color3.fromHex("FFFFFF");
-				TextSize             = 20;
+				TextSize             = math.floor(BtnSize * 0.42);
 				ZIndex               = 101;
 			});
 			Library:RegisterAccent(Glyph, "TextColor3");
@@ -10054,7 +10132,8 @@ do
 
 		-- scale node for the tap bounce animation
 		local BtnScale = OrigCreateInstance(Library, "UIScale", { Parent = Btn; Scale = 1 });
-		local DarkBg   = Color3.fromHex("141414");
+		local ClosedA  = Color3.fromHex("1C1C1E");
+		local ClosedB  = Color3.fromHex("101012");
 
 		Library:Draggable(Btn);
 
@@ -10069,10 +10148,15 @@ do
 		local function RefreshStateTint()
 			local Win = Library.CurrentlyOpen;
 			local OpenNow = Win and Win.Visible;
-			Library:Tween(Btn, TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-				BackgroundColor3 = OpenNow and Library.Accent or DarkBg;
-			}):Play();
+			-- gradient colors aren't tweenable; rebuild the sequence (one-off, cheap)
+			local A = OpenNow and Library.Accent or ClosedA;
+			local B = OpenNow and Library.Accent:Lerp(Color3.new(0, 0, 0), 0.45) or ClosedB;
+			BtnGradient.Color = NewColorSequence({
+				NewColorSequenceKeypoint(0, A);
+				NewColorSequenceKeypoint(1, B);
+			});
 		end;
+		Library:OnAccent(function() RefreshStateTint() end);
 
 		-- idle breathing pulse on the accent ring (paused while menu is open / lite mode)
 		task.spawn(function()
@@ -10112,6 +10196,7 @@ do
 
 		-- tap = toggle menu; drag = move button (decided by travel distance)
 		local DownPos = nil;
+		local LpFiredAt = 0; -- long-press timestamp, suppresses the tap that follows
 		Library:Connection(Btn.InputBegan, function(Input)
 			if Input.UserInputType == Enum.UserInputType.Touch
 				or Input.UserInputType == Enum.UserInputType.MouseButton1 then
@@ -10125,8 +10210,16 @@ do
 			local P = Vector2.new(Input.Position.X, Input.Position.Y);
 			local Dist = (P - DownPos).Magnitude;
 			DownPos = nil;
+			if os.clock() - LpFiredAt < 0.35 then return end; -- long-press just handled it
 			if Dist <= 10 then
 				PlayTapBounce();
+				-- subtle haptic tick on supported devices
+				pcall(function()
+					HapticService:SetMotor(Enum.UserInputType.Touch, Enum.VibrationMotor.Large, 0.35);
+					task.delay(0.06, function()
+						HapticService:SetMotor(Enum.UserInputType.Touch, Enum.VibrationMotor.Large, 0);
+					end);
+				end);
 				local Win = Library.CurrentlyOpen;
 				if Win then Win:Toggle() end;
 				task.defer(RefreshStateTint);
@@ -10134,6 +10227,15 @@ do
 				task.defer(SnapToEdge);
 			end;
 		end);
+
+		-- long-press the floating button: snap it back to the default edge spot
+		Library:BindLongPress(Btn, function()
+			LpFiredAt = os.clock();
+			Library:Tween(Btn, TweenInfo.new(0.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+				Position = UDim2.new(1, -12, 0.5, 0);
+			}):Play();
+			Library:Notify("Menu button position reset", 1.5);
+		end, 0.6);
 
 		local Obj = { Gui = BtnGui, Button = Btn, Ring = Ring };
 		function Obj:Show() BtnGui.Enabled = true end;
