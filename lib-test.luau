@@ -611,6 +611,63 @@ function Library:Tween(Inst, Info, Props)
 	return TweenService:Create(Inst, Scaled, Props);
 end;
 
+-- [MOBILE PATCH] single-driver group fade: ONE RenderStepped connection lerps every captured
+-- transparency at once. Opening/closing a window used to spawn 100-200 TweenService tweens in
+-- the same frame (creation spike = visible stutter); now it is one connection and a flat list.
+-- Values start from each instance's CURRENT transparency, so reversing mid-fade is seamless.
+function Library:_FadeGroup(Map, Mode, Duration, Style, Dir, OnComplete)
+	local Speed = self.AnimationSpeed or 1;
+	if Speed < 0.05 then Speed = 0.05 end;
+	Duration = (tonumber(Duration) or 0.2) / Speed;
+	Style = self.EasingStyle     or Style or Enum.EasingStyle.Quint;
+	Dir   = self.EasingDirection or Dir   or Enum.EasingDirection.Out;
+	local Entries = {};
+	for Inst, PMap in Map do
+		if Inst and Inst.Parent then
+			for P, Orig in PMap do
+				if Orig < 1 then -- only things that are visible participate
+					local To = (Mode == "out") and 1 or Orig;
+					local Ok, From = pcall(function() return Inst[P] end);
+					if Ok and type(From) == "number" and math.abs(From - To) > 0.001 then
+						table.insert(Entries, { Inst = Inst, P = P, From = From, To = To });
+					end;
+				end;
+			end;
+		end;
+	end;
+	if #Entries == 0 then
+		if OnComplete then OnComplete() end;
+		return nil;
+	end;
+	local Start = os.clock();
+	local Conn;
+	Conn = RunService.RenderStepped:Connect(function()
+		local T = math.min((os.clock() - Start) / Duration, 1);
+		local A = TweenService:GetValue(T, Style, Dir);
+		for _, E in Entries do
+			pcall(function()
+				if E.Inst.Parent then E.Inst[E.P] = E.From + (E.To - E.From) * A end;
+			end);
+		end;
+		if T >= 1 then
+			Conn:Disconnect();
+			if OnComplete then OnComplete() end;
+		end;
+	end);
+	return Conn;
+end;
+
+-- [MOBILE PATCH] re-capture a fade map without polluting it with mid-fade values:
+-- instances seen before keep their true resting values, only new instances use live values.
+function Library:_RefreshFadeMap(Old, New)
+	if Old then
+		for Inst, PMap in New do
+			if Old[Inst] then New[Inst] = Old[Inst] end;
+		end;
+	end;
+	return New;
+end;
+
 Library._ActiveDraggers = {};
 
 function Library:_RegisterDragger(Handler)
@@ -5793,7 +5850,7 @@ RegisterGradLerp(GradEntry)
 	self.CurrentlyOpen = Window;
 
 	Window.Visible = true;
-	Window._FadeToken = 0;
+	Window._ActiveFade = nil; -- [MOBILE PATCH] in-flight single-driver fade connection
 	Window._FadeOriginals = nil;
 	local FadeProps = {
 		Frame          = { "BackgroundTransparency" };
@@ -5834,55 +5891,29 @@ RegisterGradLerp(GradEntry)
 		if self.Visible == State then return end;
 		self.Visible = State and true or false;
 		if Library._ReduceAnimations then Gui.Enabled = self.Visible; AnimScale.Scale = 1; return end; -- [MOBILE PATCH] lite mode: instant toggle, no tween storm
-		self._FadeToken = self._FadeToken + 1;
-		local Mine = self._FadeToken;
-		-- [MOBILE PATCH] tuned open/close: soft Quint-out settle when opening,
-		-- Sine-out fade when closing (fast start, gentle end — no abrupt pop)
-		local Info = self.Visible
-			and TweenInfo.new(0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-			or  TweenInfo.new(0.18, Enum.EasingStyle.Sine,  Enum.EasingDirection.Out);
-		if not self.Visible and self._FadeOriginals
-			and os.clock() - (self._ShownAt or 0) < Info.Time then
-			for Inst, PMap in self._FadeOriginals do
-				if Inst.Parent then
-					for P, V in PMap do Inst[P] = V end;
-				end;
-			end;
-		end;
-		if not self.Visible or not self._FadeOriginals then
+		-- [MOBILE PATCH] single-driver fade: kill any in-flight fade, then drive the whole
+		-- window from one RenderStepped connection (no 100+ tween burst = no frame spike).
+		if self._ActiveFade then self._ActiveFade:Disconnect(); self._ActiveFade = nil end;
+		if not self.Visible then
+			self._FadeOriginals = Library:_RefreshFadeMap(self._FadeOriginals, CaptureOriginals());
+		elseif not self._FadeOriginals then
 			self._FadeOriginals = CaptureOriginals();
 		end;
 		if self.Visible then
-			self._ShownAt = os.clock();
 			Gui.Enabled = true;
 			-- [MOBILE PATCH] subtle zoom-in on top of the fade (Quint Out = snappy settle)
 			AnimScale.Scale = 0.965;
 			Library:Tween(AnimScale, TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
 				Scale = 1;
 			}):Play();
-			for Inst, PMap in self._FadeOriginals do
-				if Inst.Parent then
-					local Goal = {};
-					for P, V in PMap do Goal[P] = V end;
-					Library:Tween(Inst, Info, Goal):Play();
-				end;
-			end;
+			self._ActiveFade = Library:_FadeGroup(self._FadeOriginals, "in", 0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
 		else
-			-- [MOBILE PATCH] matching zoom-out while fading
+			-- [MOBILE PATCH] matching zoom-out while fading (Sine Out: fast start, gentle end)
 			Library:Tween(AnimScale, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
 				Scale = 0.965;
 			}):Play();
-			for Inst, PMap in self._FadeOriginals do
-				if Inst.Parent then
-					local Goal = {};
-					for P in PMap do Goal[P] = 1 end;
-					Library:Tween(Inst, Info, Goal):Play();
-				end;
-			end;
-			task.delay(Info.Time, function()
-				if self._FadeToken == Mine and not self.Visible then
-					Gui.Enabled = false;
-				end;
+			self._ActiveFade = Library:_FadeGroup(self._FadeOriginals, "out", 0.2, Enum.EasingStyle.Sine, Enum.EasingDirection.Out, function()
+				if not self.Visible then Gui.Enabled = false end;
 			end);
 		end;
 	end;
@@ -6840,8 +6871,7 @@ function Library:Playerlist(Opts)
 	SearchInput:GetPropertyChangedSignal("Text"):Connect(RefreshPlayerList);
 
 	local FadeOriginals = nil;
-	local FadeToken = 0;
-	local ShownAt = 0;
+	local ActiveFade = nil; -- [MOBILE PATCH] in-flight single-driver fade connection
 
 	local function CaptureFade()
 		local Map = {};
@@ -6874,41 +6904,20 @@ function Library:Playerlist(Opts)
 		if self._Visible == State then return end;
 		self._Visible = State;
 		if Library._ReduceAnimations then Gui.Enabled = State and true or false; return end; -- [MOBILE PATCH] lite mode: instant toggle
-		FadeToken += 1;
-		local Mine = FadeToken;
-		local Info = TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
-		if not State and FadeOriginals and os.clock() - ShownAt < Info.Time then
-			for Inst, PMap in FadeOriginals do
-				if Inst and Inst.Parent then
-					for P, V in PMap do Inst[P] = V end;
-				end;
-			end;
-		end;
-		if not State or not FadeOriginals then
+		-- [MOBILE PATCH] single-driver fade: one RenderStepped connection lerps the whole
+		-- window from CURRENT values (no tween burst, reversing mid-fade is seamless).
+		if ActiveFade then ActiveFade:Disconnect(); ActiveFade = nil end;
+		if not State then
+			FadeOriginals = Library:_RefreshFadeMap(FadeOriginals, CaptureFade());
+		elseif not FadeOriginals then
 			FadeOriginals = CaptureFade();
 		end;
 		if State then
-			ShownAt = os.clock();
 			Gui.Enabled = true;
-			for Inst, PMap in FadeOriginals do
-				if Inst and Inst.Parent then
-					-- [MOBILE PATCH] tween-storm cut: skip already-invisible instances
-					local Goal = nil;
-					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = V end; end;
-					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
-				end;
-			end;
+			ActiveFade = Library:_FadeGroup(FadeOriginals, "in", 0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
 		else
-			for Inst, PMap in FadeOriginals do
-				if Inst and Inst.Parent then
-					-- [MOBILE PATCH] tween-storm cut: only fade what's visible
-					local Goal = nil;
-					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = 1 end; end;
-					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
-				end;
-			end;
-			task.delay(Info.Time + 0.05, function()
-				if FadeToken == Mine and not self._Visible then Gui.Enabled = false end;
+			ActiveFade = Library:_FadeGroup(FadeOriginals, "out", 0.18, Enum.EasingStyle.Sine, Enum.EasingDirection.Out, function()
+				if not self._Visible then Gui.Enabled = false end;
 			end);
 		end;
 	end;
@@ -7471,8 +7480,7 @@ function Library:SettingsWindow(Opts)
 	local Host = { Left = Column, Right = Column, Page = Page, Gui = Gui };
 
 	local FadeOriginals = nil;
-	local FadeToken = 0;
-	local ShownAt = 0;
+	local ActiveFade = nil; -- [MOBILE PATCH] in-flight single-driver fade connection
 
 	local function CaptureFade()
 		local Map = {};
@@ -7515,41 +7523,20 @@ function Library:SettingsWindow(Opts)
 		if self._Visible == State then return end;
 		self._Visible = State;
 		if Library._ReduceAnimations then Gui.Enabled = State and true or false; return end; -- [MOBILE PATCH] lite mode: instant toggle
-		FadeToken += 1;
-		local Mine = FadeToken;
-		local Info = TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
-		if not State and FadeOriginals and os.clock() - ShownAt < Info.Time then
-			for Inst, PMap in FadeOriginals do
-				if Inst and Inst.Parent then
-					for P, V in PMap do Inst[P] = V end;
-				end;
-			end;
-		end;
-		if not State or not FadeOriginals then
+		-- [MOBILE PATCH] single-driver fade: one RenderStepped connection lerps the whole
+		-- window from CURRENT values (no tween burst, reversing mid-fade is seamless).
+		if ActiveFade then ActiveFade:Disconnect(); ActiveFade = nil end;
+		if not State then
+			FadeOriginals = Library:_RefreshFadeMap(FadeOriginals, CaptureFade());
+		elseif not FadeOriginals then
 			FadeOriginals = CaptureFade();
 		end;
 		if State then
-			ShownAt = os.clock();
 			Gui.Enabled = true;
-			for Inst, PMap in FadeOriginals do
-				if Inst and Inst.Parent then
-					-- [MOBILE PATCH] tween-storm cut: skip already-invisible instances
-					local Goal = nil;
-					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = V end; end;
-					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
-				end;
-			end;
+			ActiveFade = Library:_FadeGroup(FadeOriginals, "in", 0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
 		else
-			for Inst, PMap in FadeOriginals do
-				if Inst and Inst.Parent then
-					-- [MOBILE PATCH] tween-storm cut: only fade what's visible
-					local Goal = nil;
-					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = 1 end; end;
-					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
-				end;
-			end;
-			task.delay(Info.Time + 0.05, function()
-				if FadeToken == Mine and not self._Visible then Gui.Enabled = false end;
+			ActiveFade = Library:_FadeGroup(FadeOriginals, "out", 0.18, Enum.EasingStyle.Sine, Enum.EasingDirection.Out, function()
+				if not self._Visible then Gui.Enabled = false end;
 			end);
 		end;
 	end;
@@ -8317,8 +8304,7 @@ function Library:PreviewWindow(Opts)
 	Core.Container.Position = UDim2.new(0, 5, 0, 34);
 
 	local FadeOriginals = nil;
-	local FadeToken = 0;
-	local ShownAt = 0;
+	local ActiveFade = nil; -- [MOBILE PATCH] in-flight single-driver fade connection
 
 	local function CaptureFade()
 		local Map = {};
@@ -8351,41 +8337,20 @@ function Library:PreviewWindow(Opts)
 		if self._Visible == State then return end;
 		self._Visible = State;
 		if Library._ReduceAnimations then Gui.Enabled = State and true or false; return end; -- [MOBILE PATCH] lite mode: instant toggle
-		FadeToken += 1;
-		local Mine = FadeToken;
-		local Info = TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
-		if not State and FadeOriginals and os.clock() - ShownAt < Info.Time then
-			for Inst, PMap in FadeOriginals do
-				if Inst and Inst.Parent then
-					for P, V in PMap do Inst[P] = V end;
-				end;
-			end;
-		end;
-		if not State or not FadeOriginals then
+		-- [MOBILE PATCH] single-driver fade: one RenderStepped connection lerps the whole
+		-- window from CURRENT values (no tween burst, reversing mid-fade is seamless).
+		if ActiveFade then ActiveFade:Disconnect(); ActiveFade = nil end;
+		if not State then
+			FadeOriginals = Library:_RefreshFadeMap(FadeOriginals, CaptureFade());
+		elseif not FadeOriginals then
 			FadeOriginals = CaptureFade();
 		end;
 		if State then
-			ShownAt = os.clock();
 			Gui.Enabled = true;
-			for Inst, PMap in FadeOriginals do
-				if Inst and Inst.Parent then
-					-- [MOBILE PATCH] tween-storm cut: skip already-invisible instances
-					local Goal = nil;
-					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = V end; end;
-					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
-				end;
-			end;
+			ActiveFade = Library:_FadeGroup(FadeOriginals, "in", 0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
 		else
-			for Inst, PMap in FadeOriginals do
-				if Inst and Inst.Parent then
-					-- [MOBILE PATCH] tween-storm cut: only fade what's visible
-					local Goal = nil;
-					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = 1 end; end;
-					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
-				end;
-			end;
-			task.delay(Info.Time + 0.05, function()
-				if FadeToken == Mine and not self._Visible then Gui.Enabled = false end;
+			ActiveFade = Library:_FadeGroup(FadeOriginals, "out", 0.18, Enum.EasingStyle.Sine, Enum.EasingDirection.Out, function()
+				if not self._Visible then Gui.Enabled = false end;
 			end);
 		end;
 	end;
@@ -8688,8 +8653,7 @@ function Library:LogWindow(Opts)
 	end;
 
 	local FadeOriginals = nil;
-	local FadeToken = 0;
-	local ShownAt = 0;
+	local ActiveFade = nil; -- [MOBILE PATCH] in-flight single-driver fade connection
 
 	local function CaptureFade()
 		local Map = {};
@@ -8721,41 +8685,20 @@ function Library:LogWindow(Opts)
 		if self._Visible == State then return end;
 		self._Visible = State;
 		if Library._ReduceAnimations then Gui.Enabled = State and true or false; return end; -- [MOBILE PATCH] lite mode: instant toggle
-		FadeToken += 1;
-		local Mine = FadeToken;
-		local Info = TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
-		if not State and FadeOriginals and os.clock() - ShownAt < Info.Time then
-			for Inst, PMap in FadeOriginals do
-				if Inst and Inst.Parent then
-					for P, V in PMap do Inst[P] = V end;
-				end;
-			end;
-		end;
-		if not State or not FadeOriginals then
+		-- [MOBILE PATCH] single-driver fade: one RenderStepped connection lerps the whole
+		-- window from CURRENT values (no tween burst, reversing mid-fade is seamless).
+		if ActiveFade then ActiveFade:Disconnect(); ActiveFade = nil end;
+		if not State then
+			FadeOriginals = Library:_RefreshFadeMap(FadeOriginals, CaptureFade());
+		elseif not FadeOriginals then
 			FadeOriginals = CaptureFade();
 		end;
 		if State then
-			ShownAt = os.clock();
 			Gui.Enabled = true;
-			for Inst, PMap in FadeOriginals do
-				if Inst and Inst.Parent then
-					-- [MOBILE PATCH] tween-storm cut: skip already-invisible instances
-					local Goal = nil;
-					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = V end; end;
-					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
-				end;
-			end;
+			ActiveFade = Library:_FadeGroup(FadeOriginals, "in", 0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
 		else
-			for Inst, PMap in FadeOriginals do
-				if Inst and Inst.Parent then
-					-- [MOBILE PATCH] tween-storm cut: only fade what's visible
-					local Goal = nil;
-					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = 1 end; end;
-					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
-				end;
-			end;
-			task.delay(Info.Time + 0.05, function()
-				if FadeToken == Mine and not self._Visible then Gui.Enabled = false end;
+			ActiveFade = Library:_FadeGroup(FadeOriginals, "out", 0.18, Enum.EasingStyle.Sine, Enum.EasingDirection.Out, function()
+				if not self._Visible then Gui.Enabled = false end;
 			end);
 		end;
 	end;
@@ -9109,8 +9052,7 @@ local Outer = self:CreateInstance("Frame", {
 	end);
 
 	local FadeOriginals = nil;
-	local FadeToken = 0;
-	local ShownAt = 0;
+	local ActiveFade = nil; -- [MOBILE PATCH] in-flight single-driver fade connection
 
 	local function CaptureFade()
 		local Map = {};
@@ -9140,41 +9082,20 @@ local Outer = self:CreateInstance("Frame", {
 		if self._Visible == State then return end;
 		self._Visible = State;
 		if Library._ReduceAnimations then Gui.Enabled = State and true or false; return end; -- [MOBILE PATCH] lite mode: instant toggle
-		FadeToken += 1;
-		local Mine = FadeToken;
-		local Info = TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
-		if not State and FadeOriginals and os.clock() - ShownAt < Info.Time then
-			for Inst, PMap in FadeOriginals do
-				if Inst and Inst.Parent then
-					for P, V in PMap do Inst[P] = V end;
-				end;
-			end;
-		end;
-		if not State or not FadeOriginals then
+		-- [MOBILE PATCH] single-driver fade: one RenderStepped connection lerps the whole
+		-- window from CURRENT values (no tween burst, reversing mid-fade is seamless).
+		if ActiveFade then ActiveFade:Disconnect(); ActiveFade = nil end;
+		if not State then
+			FadeOriginals = Library:_RefreshFadeMap(FadeOriginals, CaptureFade());
+		elseif not FadeOriginals then
 			FadeOriginals = CaptureFade();
 		end;
 		if State then
-			ShownAt = os.clock();
 			Gui.Enabled = true;
-			for Inst, PMap in FadeOriginals do
-				if Inst and Inst.Parent then
-					-- [MOBILE PATCH] tween-storm cut: skip already-invisible instances
-					local Goal = nil;
-					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = V end; end;
-					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
-				end;
-			end;
+			ActiveFade = Library:_FadeGroup(FadeOriginals, "in", 0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
 		else
-			for Inst, PMap in FadeOriginals do
-				if Inst and Inst.Parent then
-					-- [MOBILE PATCH] tween-storm cut: only fade what's visible
-					local Goal = nil;
-					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = 1 end; end;
-					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
-				end;
-			end;
-			task.delay(Info.Time + 0.05, function()
-				if FadeToken == Mine and not self._Visible then Gui.Enabled = false end;
+			ActiveFade = Library:_FadeGroup(FadeOriginals, "out", 0.18, Enum.EasingStyle.Sine, Enum.EasingDirection.Out, function()
+				if not self._Visible then Gui.Enabled = false end;
 			end);
 		end;
 	end;
@@ -10230,8 +10151,7 @@ function Library:InvViewer(Opts)
 	end;
 
 	local FadeOriginals = nil;
-	local FadeToken = 0;
-	local ShownAt = 0;
+	local ActiveFade = nil; -- [MOBILE PATCH] in-flight single-driver fade connection
 
 	local function CaptureFade()
 		local Map = {};
@@ -10265,42 +10185,21 @@ function Library:InvViewer(Opts)
 		if self._Visible == State then return end;
 		self._Visible = State;
 		if Library._ReduceAnimations then Gui.Enabled = State and true or false; return end; -- [MOBILE PATCH] lite mode: instant toggle
-		FadeToken += 1;
-		local Mine = FadeToken;
-		local Info = TweenInfo.new(0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
-		if not State and FadeOriginals and os.clock() - ShownAt < Info.Time then
-			for Inst, PMap in FadeOriginals do
-				if Inst and Inst.Parent then
-					for P, V in PMap do Inst[P] = V end;
-				end;
-			end;
-		end;
-		if not State or not FadeOriginals then
+		-- [MOBILE PATCH] single-driver fade: one RenderStepped connection lerps the whole
+		-- window from CURRENT values (no tween burst, reversing mid-fade is seamless).
+		if ActiveFade then ActiveFade:Disconnect(); ActiveFade = nil end;
+		if not State then
+			FadeOriginals = Library:_RefreshFadeMap(FadeOriginals, CaptureFade());
+		elseif not FadeOriginals then
 			FadeOriginals = CaptureFade();
 		end;
 		if State then
-			ShownAt = os.clock();
 			Gui.Enabled   = true;
 			Outer.Visible = true;
-			for Inst, PMap in FadeOriginals do
-				if Inst and Inst.Parent then
-					-- [MOBILE PATCH] tween-storm cut: skip already-invisible instances
-					local Goal = nil;
-					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = V end; end;
-					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
-				end;
-			end;
+			ActiveFade = Library:_FadeGroup(FadeOriginals, "in", 0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
 		else
-			for Inst, PMap in FadeOriginals do
-				if Inst and Inst.Parent then
-					-- [MOBILE PATCH] tween-storm cut: only fade what's visible
-					local Goal = nil;
-					for P, V in PMap do if V < 1 then Goal = Goal or {}; Goal[P] = 1 end; end;
-					if Goal then Library:Tween(Inst, Info, Goal):Play() end;
-				end;
-			end;
-			task.delay(Info.Time + 0.05, function()
-				if FadeToken == Mine and not self._Visible then
+			ActiveFade = Library:_FadeGroup(FadeOriginals, "out", 0.18, Enum.EasingStyle.Sine, Enum.EasingDirection.Out, function()
+				if not self._Visible then
 					Gui.Enabled   = false;
 					Outer.Visible = false;
 				end;
@@ -10347,13 +10246,15 @@ function Library:InvViewer(Opts)
 end;
 
 --============================================================
--- [MOBILE PATCH] Mobile support layer (v8, LinoriaLib-identical)
+-- [MOBILE PATCH] Mobile support layer (v9, LinoriaLib-identical)
 --  - PC / mobile auto-detect  (Library.IsMobile)
 --  - NO auto-scaling          (native size like LinoriaLib; SetDPIScale/SetUIScale to opt in)
 --  - mobile window sizing     (Library.lua:6545 — height fills screen minus 35px top bar,
 --                              clamped 200..600, 550 wide by default, centered)
 --  - floating buttons         (LinoriaLib-style "Toggle UI" / "Lock UI" pills)
 --  - direct 1:1 render-driven drag (mouse + touch) + CanDrag guards + shadow parking
+--  - single-driver fades      (one RenderStepped connection lerps the whole window —
+--                              no 100+ tween burst on open/close, seamless mid-fade reversal)
 --  - on-screen keyboard avoidance for TextBoxes
 --  - keeps every window reachable on rotation
 --============================================================
