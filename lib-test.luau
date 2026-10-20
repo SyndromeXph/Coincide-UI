@@ -245,130 +245,267 @@ local function check()
 	return true
 end
 
+-- [MOBILE PATCH] premium startup splash: same Drawing-based loader contract as before
+-- (CreateLoader(Title, Size) + SetText steps below), but restyled and fully animated.
+-- One RenderStepped driver runs everything: fade+rise entrance, rotating chase arc,
+-- breathing halo, exponential progress fill, sheen sweep, cross-fading status text,
+-- fade-out exit. Drawing has no gradients, so the body gradient / glow are strip-faked.
 function CreateLoader(Title, WindowSize)
     local Camera = Workspace.CurrentCamera
+    local Vp = Camera and Camera.ViewportSize or Vector2.new(800, 600)
+    local PW, PH = 320, 188
+    local BX = (Vp.X - PW) / 2
+    local BY = (Vp.Y - PH) / 2
+    local CX = BX + PW / 2
 
+    local Accent = Library.Accent or Color3.fromHex("99bcff")
+    local FadeList = {} -- {O, BaseTransparency} faded by master alpha
+    local RiseList = {} -- {O, X, Y} static positions, shifted by rise offset
+    local All = {}
 
-    local Drawings = {}
-    
+    local function New(Class)
+        local D = Drawing.new(Class)
+        D.Visible = true
+        table.insert(All, D)
+        return D
+    end
+    local function Reg(D, BaseT, X, Y)
+        D.Transparency = 1
+        table.insert(FadeList, { O = D, T = BaseT or 0 })
+        if X then table.insert(RiseList, { O = D, X = X, Y = Y }) end
+        return D
+    end
 
-    local MiddleX = (Camera.ViewportSize.X / 2) - (WindowSize.X / 2)
-    local MiddleY = (Camera.ViewportSize.Y / 2) - (WindowSize.Y / 2)
+    -- background dim
+    local Dim = New("Square")
+    Dim.Filled = true; Dim.Thickness = 0; Dim.Color = Color3.fromHex("000000")
+    Dim.Size = Vp; Dim.Position = Vector2.new(0, 0)
+    Reg(Dim, 0.42)
 
-    local WindowOutline = Drawing.new("Square")
-    WindowOutline.Size = WindowSize
-    WindowOutline.Thickness = 0
-    WindowOutline.Color = Color3.fromHex("#000005")
-    WindowOutline.Visible = true
-    WindowOutline.Filled = true
-    WindowOutline.Position = Vector2.new(MiddleX, MiddleY)
-    table.insert(Drawings, WindowOutline)
-    
+    -- panel border + strip-faked vertical gradient body
+    local Border = New("Square")
+    Border.Filled = true; Border.Thickness = 0; Border.Color = Color3.fromHex("2E2E36")
+    Border.Size = Vector2.new(PW, PH)
+    Reg(Border, 0.15, BX, BY)
 
-    local WindowOutlineBorder = Drawing.new("Square")
-    WindowOutlineBorder.Size = Vector2.new(WindowOutline.Size.X - 2, WindowOutline.Size.Y - 2)
-    WindowOutlineBorder.Position = Vector2.new(WindowOutline.Position.X + 1, WindowOutline.Position.Y + 1)
-    WindowOutlineBorder.Thickness = 0
-    WindowOutlineBorder.Color = Color3.fromHex("#7885f5")
-    WindowOutlineBorder.Visible = true
-    WindowOutlineBorder.Filled = true
-    table.insert(Drawings, WindowOutlineBorder)
-    
+    local Strips = 22
+    local StripH = (PH - 2) / Strips
+    for I = 0, Strips - 1 do
+        local T = I / (Strips - 1)
+        local S = New("Square")
+        S.Filled = true; S.Thickness = 0
+        S.Color = Color3.fromRGB(
+            math.floor(0x1C + (0x11 - 0x1C) * T + 0.5),
+            math.floor(0x1C + (0x11 - 0x1C) * T + 0.5),
+            math.floor(0x22 + (0x14 - 0x22) * T + 0.5))
+        S.Size = Vector2.new(PW - 2, StripH + 1) -- +1 kills seams
+        Reg(S, 0, BX + 1, BY + 1 + I * StripH)
+    end
 
-    local WindowFrame = Drawing.new("Square")
-    WindowFrame.Size = Vector2.new(WindowOutlineBorder.Size.X - 2, WindowOutlineBorder.Size.Y - 2)
-    WindowFrame.Position = Vector2.new(WindowOutlineBorder.Position.X + 1, WindowOutlineBorder.Position.Y + 1)
-    WindowFrame.Thickness = 0
-    WindowFrame.Transparency = 1
-    WindowFrame.Color = Color3.fromHex("#191919")
-    WindowFrame.Visible = true
-    WindowFrame.Filled = true
-    table.insert(Drawings, WindowFrame)
-    
+    -- top highlight line, fading at both ends
+    local TLSegs = 18
+    for I = 0, TLSegs - 1 do
+        local T = I / (TLSegs - 1)
+        local Env = 1 - math.abs(T - 0.5) * 2
+        local L = New("Square")
+        L.Filled = true; L.Thickness = 0; L.Color = Accent
+        L.Size = Vector2.new((PW - 24) / TLSegs + 0.5, 1)
+        Reg(L, 1 - Env * 0.85, BX + 12 + I * (PW - 24) / TLSegs, BY)
+    end
 
-    local WindowTitle = Drawing.new("Text")
-    WindowTitle.Font = Drawing.Fonts.Plex
-    WindowTitle.Size = 13
-    WindowTitle.Color = Color3.fromHex("#e8e8e8")
-    WindowTitle.Text = Title
-    WindowTitle.Position = Vector2.new(WindowFrame.Position.X + (WindowFrame.Size.X / 2), WindowOutlineBorder.Position.Y + 8)
-    WindowTitle.Visible = true
-    WindowTitle.Center = true
-    WindowTitle.Outline = false
-    table.insert(Drawings, WindowTitle)
-    
+    -- bottom accent glow (strips, denser toward the bottom edge)
+    local GlowH, GlowStrips = 24, 12
+    for I = 0, GlowStrips - 1 do
+        local T = I / (GlowStrips - 1)
+        local S = New("Square")
+        S.Filled = true; S.Thickness = 0; S.Color = Accent
+        S.Size = Vector2.new(PW - 2, GlowH / GlowStrips + 1)
+        Reg(S, 0.99 - T * 0.17, BX + 1, BY + PH - 1 - GlowH + I * (GlowH / GlowStrips))
+    end
 
-    local WindowText = Drawing.new("Text")
-    WindowText.Font = Drawing.Fonts.Plex
-    WindowText.Size = 13
-    WindowText.Color = Color3.fromHex("#e8e8e8")
-    WindowText.Visible = true
-    WindowText.Center = true
-    WindowText.Outline = false
-    table.insert(Drawings, WindowText)
-    
+    -- logo (may not exist on a broken setup; the ring alone still looks fine)
+    local LogoSize = 52
+    local LogoCY = BY + 16 + LogoSize / 2
+    local Icon = New("Image")
+    local OkLogo, LogoData = pcall(readfile, "Hydrogen/logo2.png")
+    if OkLogo and LogoData then
+        Icon.Data = LogoData
+        Icon.Size = Vector2.new(LogoSize, LogoSize)
+        Icon.Rounding = 8
+        Reg(Icon, 0, CX - LogoSize / 2, LogoCY - LogoSize / 2)
+    else
+        Icon.Visible = false
+    end
 
-    local SliderInline = Drawing.new("Square")
-    SliderInline.Size = Vector2.new(205, 15)
-    SliderInline.Color = Color3.fromHex("#323232")
-    SliderInline.Transparency = 0.75
-    SliderInline.Thickness = 0
-    SliderInline.Visible = true
-    SliderInline.Filled = true
-    table.insert(Drawings, SliderInline)
-    
+    -- breathing halo + base ring + rotating chase arc
+    local Halo = New("Circle")
+    Halo.Filled = true; Halo.Color = Accent; Halo.NumSides = 48; Halo.Thickness = 1
+    Halo.Transparency = 1
+    local Ring = New("Circle")
+    Ring.Filled = false; Ring.Color = Color3.fromHex("3A3A44"); Ring.NumSides = 48
+    Ring.Thickness = 2; Ring.Radius = 36; Ring.Transparency = 1
+    local NSEG = 22
+    local ArcSegs = {}
+    for I = 1, NSEG do
+        local L = New("Line")
+        L.Thickness = 2; L.Color = Accent; L.Transparency = 1
+        ArcSegs[I] = L
+    end
 
-    local SliderOutline = Drawing.new("Square")
-    SliderOutline.Size = Vector2.new(SliderInline.Size.X - 2, SliderInline.Size.Y - 2)
-    SliderOutline.Color = Color3.fromHex("#000005")
-    SliderOutline.Transparency = 0.5
-    SliderOutline.Thickness = 0
-    SliderOutline.Visible = true
-    SliderOutline.Filled = true
-    table.insert(Drawings, SliderOutline)
+    -- texts
+    local TitleD = New("Text")
+    TitleD.Font = Drawing.Fonts.Plex; TitleD.Size = 14; TitleD.Color = Color3.fromHex("FFFFFF")
+    TitleD.Center = true; TitleD.Outline = false; TitleD.Text = tostring(Title or "Loading")
+    Reg(TitleD, 0, CX, BY + 82)
 
-    local SliderFrame = Drawing.new("Square")
-    SliderFrame.Color = Color3.fromHex("#7885f5")
-    SliderFrame.Transparency = 0.75
-    SliderFrame.Thickness = 0
-    SliderFrame.Visible = true
-    SliderFrame.Filled = true
-    table.insert(Drawings, SliderFrame)
-    
+    local MsgD = New("Text")
+    MsgD.Font = Drawing.Fonts.Plex; MsgD.Size = 12; MsgD.Color = Accent
+    MsgD.Center = true; MsgD.Outline = false; MsgD.Text = ""
+    Reg(MsgD, 0, CX, BY + 101)
 
-local MiddleIcon = Drawing.new("Image");
-MiddleIcon.Size = Vector2.new(185, 185);
-MiddleIcon.Rounding = 5;
-MiddleIcon.Transparency = 1;
-MiddleIcon.Visible = true;
-LogoData = readfile("Hydrogen/logo2.png");
-MiddleIcon.Data = LogoData;
-table.insert(Drawings, MiddleIcon);
+    local TW, TH = 240, 8
+    local BarX, BarY = CX - TW / 2, BY + PH - 32
+    local PctD = New("Text")
+    PctD.Font = Drawing.Fonts.Plex; PctD.Size = 11; PctD.Color = Color3.fromHex("8C8F99")
+    PctD.Center = false; PctD.Outline = false; PctD.Text = "0%"
+    Reg(PctD, 0, BarX + TW - 26, BarY - 16)
 
-SliderInline.Position = Vector2.new(
-	WindowOutline.Position.X + (WindowOutline.Size.X / 2) - (SliderOutline.Size.X / 2), 
-	(WindowOutline.Position.Y + WindowOutline.Size.Y) - 30
-);
-SliderOutline.Position = Vector2.new(SliderInline.Position.X + 1, SliderInline.Position.Y + 1);
-SliderFrame.Position = Vector2.new(SliderInline.Position.X + 1, SliderInline.Position.Y + 1);
-WindowText.Position = Vector2.new(WindowFrame.Position.X + (WindowFrame.Size.X / 2), SliderInline.Position.Y - 16);
-MiddleIcon.Position = Vector2.new(
-	WindowOutline.Position.X + (WindowOutline.Size.X / 2) - (MiddleIcon.Size.X / 2), 
-	WindowOutline.Position.Y + (WindowOutline.Size.Y / 2) - (MiddleIcon.Size.Y / 2) - 15
-);
-MiddleIcon.Transparency = 1;
+    -- capsule progress track
+    local Track = New("Square")
+    Track.Filled = true; Track.Thickness = 0; Track.Color = Color3.fromHex("0B0B0E")
+    Track.Size = Vector2.new(TW, TH)
+    Reg(Track, 0, BarX, BarY)
+    local TrackL = New("Circle")
+    TrackL.Filled = true; TrackL.Color = Track.Color; TrackL.NumSides = 24; TrackL.Radius = TH / 2
+    Reg(TrackL, 0, BarX, BarY + TH / 2)
+    local TrackR = New("Circle")
+    TrackR.Filled = true; TrackR.Color = Track.Color; TrackR.NumSides = 24; TrackR.Radius = TH / 2
+    Reg(TrackR, 0, BarX + TW, BarY + TH / 2)
+    local TrackB = New("Square")
+    TrackB.Filled = false; TrackB.Thickness = 1; TrackB.Color = Color3.fromHex("2E2E36")
+    TrackB.Size = Vector2.new(TW, TH)
+    Reg(TrackB, 0.35, BarX, BarY)
 
+    -- fill + rounded leading cap + sheen (all driven per-frame)
+    local Fill = New("Square")
+    Fill.Filled = true; Fill.Thickness = 0; Fill.Color = Accent; Fill.Transparency = 1
+    local FillCap = New("Circle")
+    FillCap.Filled = true; FillCap.Color = Accent; FillCap.NumSides = 24
+    FillCap.Radius = TH / 2; FillCap.Transparency = 1
+    local Sheen = New("Square")
+    Sheen.Filled = true; Sheen.Thickness = 0; Sheen.Color = Color3.fromHex("FFFFFF")
+    Sheen.Size = Vector2.new(14, TH); Sheen.Transparency = 1
 
+    -- animation state
+    local Birth = tick()
+    local MasterA = 0
+    local Closing, Cleaned = false, false
+    local TargetP, ShownP = 0, 0
+    local Phase, HaloClock, SheenClock = 0, 0, 0
+    local MsgA, MsgOut, PendingMsg = 1, false, nil
+    local RingR = 36
+    local ArcSpan = math.rad(150)
+
+    local Conn
+    Conn = RunService.RenderStepped:Connect(function(DT)
+        if Cleaned then return end
+
+        if Closing then
+            MasterA = math.max(0, MasterA - DT / 0.35)
+        else
+            MasterA = math.min(1, (tick() - Birth) / 0.45)
+        end
+        local T0 = math.min((tick() - Birth) / 0.5, 1)
+        local RY = (1 - T0) ^ 4 * 14 -- rise: 14px -> 0, quart-out
+        if Closing then RY = RY + (1 - MasterA) * 8 end -- settle-down on exit
+
+        for _, E in FadeList do E.O.Transparency = 1 - (1 - E.T) * MasterA end
+        for _, E in RiseList do E.O.Position = Vector2.new(E.X, E.Y + RY) end
+
+        -- ring / halo / chase arc
+        local LCY = LogoCY + RY
+        Ring.Position = Vector2.new(CX, LCY)
+        Ring.Transparency = 1 - 0.55 * MasterA
+        HaloClock = HaloClock + DT
+        Halo.Position = Vector2.new(CX, LCY)
+        Halo.Radius = 29 + 4 * math.sin(HaloClock * 2.4)
+        Halo.Transparency = 1 - (0.12 - 0.06 * math.sin(HaloClock * 2.4 + 1.2)) * MasterA
+        Phase = Phase + DT * 2.6
+        for I = 1, NSEG do
+            local A0 = Phase + (I - 1) / NSEG * ArcSpan
+            local A1 = Phase + I / NSEG * ArcSpan
+            local L = ArcSegs[I]
+            L.From = Vector2.new(CX + math.cos(A0) * RingR, LCY + math.sin(A0) * RingR)
+            L.To   = Vector2.new(CX + math.cos(A1) * RingR, LCY + math.sin(A1) * RingR)
+            local Tail = I / NSEG
+            L.Transparency = 1 - (0.05 + Tail * 0.93) * MasterA
+        end
+
+        -- progress: exponential smoothing (no step jumps)
+        local A7 = 1 - math.exp(-DT * 7)
+        if math.abs(TargetP - ShownP) > 0.0005 then
+            ShownP = ShownP + (TargetP - ShownP) * A7
+        else
+            ShownP = TargetP
+        end
+        local FillW = TW * ShownP
+        if FillW > 1 then
+            local W = math.min(math.max(FillW, TH), TW)
+            Fill.Visible = true; FillCap.Visible = true
+            Fill.Size = Vector2.new(W, TH)
+            Fill.Position = Vector2.new(BarX, BarY + RY)
+            FillCap.Position = Vector2.new(BarX + W, BarY + TH / 2 + RY)
+            Fill.Transparency = 1 - MasterA
+            FillCap.Transparency = 1 - MasterA
+            if W > 40 then -- sheen sweep
+                SheenClock = (SheenClock + DT * 0.5) % 1
+                local SX = (SheenClock * 1.4 - 0.2) * (W - 14)
+                Sheen.Visible = true
+                Sheen.Position = Vector2.new(BarX + math.clamp(SX, 0, W - 14), BarY + RY)
+                Sheen.Transparency = 1 - 0.78 * MasterA
+            else
+                Sheen.Visible = false
+            end
+        else
+            Fill.Visible = false; FillCap.Visible = false; Sheen.Visible = false
+        end
+        PctD.Text = tostring(math.floor(ShownP * 100 + 0.5)) .. "%"
+
+        -- status text cross-fade
+        if MsgOut then
+            MsgA = MsgA - DT / 0.10
+            if MsgA <= 0 then
+                MsgA = 0
+                MsgD.Text = PendingMsg or ""
+                PendingMsg = nil
+                MsgOut = false
+            end
+        elseif MsgA < 1 then
+            MsgA = math.min(1, MsgA + DT / 0.16)
+        end
+        MsgD.Transparency = 1 - MsgA * MasterA
+
+        if Closing and MasterA <= 0 then
+            Cleaned = true
+            Conn:Disconnect()
+            for _, D in All do pcall(function() D:Remove() end) end
+        end
+    end)
 
     local Max = 2
     local function SetText(Val, Txt)
-        SliderFrame.Size = Vector2.new(
-            ((SliderInline.Size.X - 2) / (Max / math.clamp(Val, 0, Max))), 
-            SliderInline.Size.Y - 2
-        )
-        WindowText.Text = Txt
+        TargetP = math.clamp((tonumber(Val) or 0) / Max, 0, 1)
+        Txt = tostring(Txt or "")
+        if MsgD.Text == "" and not MsgOut then
+            MsgD.Text = Txt -- first message: no cross-fade flicker
+        elseif Txt ~= MsgD.Text then
+            PendingMsg = Txt
+            MsgOut = true
+        end
     end
-    
+    local function Cleanup()
+        Closing = true -- fade-out + removal finish inside the driver
+    end
 
     SetText(0.3, "UI Initialization [ Downloading ]")
     wait(0.2)
@@ -382,7 +519,6 @@ MiddleIcon.Transparency = 1;
             return Data
         end
     end
-    
 
     SetText(0.5, "Checking Assets")
 	local c = check()
@@ -394,9 +530,8 @@ MiddleIcon.Transparency = 1;
 		SetText(1.1, "Hydrogen will exit now.")
 		wait(2.5)
    		task.wait(1)
-    	for _, Drawing in ipairs(Drawings) do
-        Drawing:Remove()
-    	end
+    	Cleanup()
+    	return
 	end
     task.wait(0.5)
     SetText(1, "Checking Executor")
@@ -409,11 +544,9 @@ MiddleIcon.Transparency = 1;
     task.wait(0.15)
     SetText(2, "Finished")
 	getgenv().finishedloader = true
-    
+
     task.wait(1.2)
-    for _, Drawing in ipairs(Drawings) do
-        Drawing:Remove()
-    end
+    Cleanup()
 end
 
 
