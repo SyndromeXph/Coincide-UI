@@ -312,7 +312,7 @@ function CreateLoader(Title, WindowSize)
 	local GlowGrad = Instance.new("UIGradient"); GlowGrad.Rotation = 90;
 	GlowGrad.Transparency = NewNumberSequence({
 		NewNumberSequenceKeypoint(0, 1);
-		NewNumberSequenceKeypoint(1, 0.84);
+		NewNumberSequenceKeypoint(1, 0.78);
 	});
 	GlowGrad.Parent = Glow;
 
@@ -335,7 +335,7 @@ function CreateLoader(Title, WindowSize)
 	Ring.Size = UDim2.fromOffset(54, 54);
 	Ring.BackgroundTransparency = 1; Ring.BorderSizePixel = 0; Ring.ZIndex = 4; Ring.Parent = Root;
 	local RingCorner = Instance.new("UICorner"); RingCorner.CornerRadius = UDim.new(1, 0); RingCorner.Parent = Ring;
-	local RingStroke = Instance.new("UIStroke"); RingStroke.Color = Accent; RingStroke.Thickness = 2; RingStroke.Parent = Ring;
+	local RingStroke = Instance.new("UIStroke"); RingStroke.Color = Accent; RingStroke.Thickness = 3; RingStroke.Parent = Ring;
 	local RingGrad = Instance.new("UIGradient");
 	RingGrad.Transparency = NewNumberSequence({
 		NewNumberSequenceKeypoint(0,    0);
@@ -345,25 +345,89 @@ function CreateLoader(Title, WindowSize)
 	});
 	RingGrad.Parent = RingStroke;
 
-	local Halo = Instance.new("ImageLabel");
-	Halo.AnchorPoint = Vector2.new(0.5, 0.5);
-	Halo.Position = UDim2.new(0.5, 0, 0, RingCY);
-	Halo.Size = UDim2.fromOffset(34, 34);
-	Halo.BackgroundTransparency = 1; Halo.BorderSizePixel = 0; Halo.ScaleType = Enum.ScaleType.Fit;
-	Halo.ImageColor3 = Accent; Halo.ImageTransparency = 0.85; Halo.ZIndex = 3; Halo.Parent = Root;
-	local HaloScale = Instance.new("UIScale"); HaloScale.Parent = Halo;
+	-- soft accent aura behind the ring (oval faked with crossed gradients)
+	local Aura = Instance.new("Frame");
+	Aura.AnchorPoint = Vector2.new(0.5, 0.5);
+	Aura.Position = UDim2.new(0.5, 0, 0, RingCY);
+	Aura.Size = UDim2.fromOffset(160, 116);
+	Aura.BackgroundColor3 = Accent; Aura.BackgroundTransparency = 0.7;
+	Aura.BorderSizePixel = 0; Aura.ZIndex = 2; Aura.Parent = Root;
+	local AuraV = Instance.new("UIGradient");
+	AuraV.Rotation = 90;
+	AuraV.Transparency = NewNumberSequence({
+		NewNumberSequenceKeypoint(0,   1);
+		NewNumberSequenceKeypoint(0.5, 0.55);
+		NewNumberSequenceKeypoint(1,   1);
+	});
+	AuraV.Parent = Aura;
+	local AuraInner = Instance.new("Frame");
+	AuraInner.Size = UDim2.new(1, 0, 1, 0);
+	AuraInner.BackgroundColor3 = Accent; AuraInner.BackgroundTransparency = 0;
+	AuraInner.BorderSizePixel = 0; AuraInner.ZIndex = 2; AuraInner.Parent = Aura;
+	local AuraH = Instance.new("UIGradient");
+	AuraH.Transparency = NewNumberSequence({
+		NewNumberSequenceKeypoint(0,   1);
+		NewNumberSequenceKeypoint(0.5, 0.55);
+		NewNumberSequenceKeypoint(1,   1);
+	});
+	AuraH.Parent = AuraInner;
+	local AuraScale = Instance.new("UIScale"); AuraScale.Parent = Aura;
+
+	-- icon tile: accent gradient rounded tile; logo image on top, monogram fallback
+	local Tile = Instance.new("Frame");
+	Tile.AnchorPoint = Vector2.new(0.5, 0.5);
+	Tile.Position = UDim2.new(0.5, 0, 0, RingCY);
+	Tile.Size = UDim2.fromOffset(34, 34);
+	Tile.BackgroundColor3 = Accent; Tile.BorderSizePixel = 0; Tile.ZIndex = 5; Tile.Parent = Root;
+	local TileCorner = Instance.new("UICorner"); TileCorner.CornerRadius = UDim.new(0, 9); TileCorner.Parent = Tile;
+	local TileGrad = Instance.new("UIGradient"); TileGrad.Rotation = 90;
+	TileGrad.Color = NewColorSequence({
+		NewColorSequenceKeypoint(0, LightenAccent(Accent));
+		NewColorSequenceKeypoint(1, Accent:Lerp(Color3.fromHex("000000"), 0.28));
+	});
+	TileGrad.Parent = Tile;
+	local TileStroke = Instance.new("UIStroke"); TileStroke.Color = Color3.fromHex("FFFFFF");
+	TileStroke.Thickness = 1; TileStroke.Transparency = 0.82; TileStroke.Parent = Tile;
 
 	local Icon = Instance.new("ImageLabel");
 	Icon.AnchorPoint = Vector2.new(0.5, 0.5);
-	Icon.Position = UDim2.new(0.5, 0, 0, RingCY);
-	Icon.Size = UDim2.fromOffset(26, 26);
+	Icon.Position = UDim2.new(0.5, 0, 0.5, 0);
+	Icon.Size = UDim2.fromOffset(22, 22);
 	Icon.BackgroundTransparency = 1; Icon.BorderSizePixel = 0; Icon.ScaleType = Enum.ScaleType.Fit;
-	Icon.ZIndex = 5; Icon.Parent = Root;
-	local OkAsset, LogoAsset = pcall(getcustomasset, "Hydrogen/logo2.png");
-	if OkAsset and LogoAsset then
-		Icon.Image = LogoAsset; Halo.Image = LogoAsset;
+	Icon.ZIndex = 6; Icon.Parent = Tile;
+
+	local Mono = Instance.new("TextLabel");
+	Mono.AnchorPoint = Vector2.new(0.5, 0.5);
+	Mono.Position = UDim2.new(0.5, 0, 0.5, 0);
+	Mono.Size = UDim2.new(1, 0, 1, 0);
+	Mono.BackgroundTransparency = 1;
+	Mono.Text = string.upper(string.sub(tostring(Title or "C"), 1, 1));
+	Mono.TextColor3 = Color3.fromHex("FFFFFF"); Mono.TextSize = 16; Mono.Font = Enum.Font.GothamBold;
+	Mono.ZIndex = 6; Mono.Visible = false; Mono.Parent = Tile;
+
+	-- logo: local file -> re-download -> monogram fallback (icon is never empty)
+	local LogoAsset = (function()
+		if isfile("Hydrogen/logo2.png") then
+			local Ok, A = pcall(getcustomasset, "Hydrogen/logo2.png");
+			if Ok and A then return A; end;
+		end;
+		local OkD, Data = pcall(function()
+			return game:HttpGet("https://www.dropbox.com/scl/fi/r3qlj26fdg2bniukw6ut9/logo2.png?rlkey=5kq8p4mpdm4e5laqd7havyfsn&st=od93q1vk&dl=1");
+		end);
+		if OkD and Data and #Data > 100 then
+			pcall(function()
+				if not isfolder("Hydrogen") then makefolder("Hydrogen") end;
+				writefile("Hydrogen/logo2.png", Data);
+			end);
+			local Ok, A = pcall(getcustomasset, "Hydrogen/logo2.png");
+			if Ok and A then return A; end;
+		end;
+		return nil;
+	end)();
+	if LogoAsset then
+		Icon.Image = LogoAsset;
 	else
-		Icon.Visible = false; Halo.Visible = false;
+		Icon.Visible = false; Mono.Visible = true;
 	end;
 
 	-- texts
@@ -383,7 +447,7 @@ function CreateLoader(Title, WindowSize)
 	PctLbl.AnchorPoint = Vector2.new(1, 0);
 	PctLbl.Position = UDim2.new(1, -36, 0, PH - 52); PctLbl.Size = UDim2.new(0, 60, 0, 11);
 	PctLbl.BackgroundTransparency = 1; PctLbl.Text = "0%";
-	PctLbl.TextColor3 = Color3.fromHex("8C8F99"); PctLbl.TextSize = 11;
+	PctLbl.TextColor3 = LightenAccent(Accent); PctLbl.TextSize = 11;
 	PctLbl.Font = Enum.Font.Gotham; PctLbl.TextXAlignment = Enum.TextXAlignment.Right;
 	PctLbl.ZIndex = 3; PctLbl.Parent = Root;
 
@@ -433,8 +497,8 @@ function CreateLoader(Title, WindowSize)
 		Spin = (Spin + DT * 140) % 360;
 		RingGrad.Rotation = Spin;
 		HaloClock = HaloClock + DT;
-		HaloScale.Scale = 1.08 + 0.08 * math.sin(HaloClock * 2.4);
-		Halo.ImageTransparency = 0.82 + 0.1 * math.sin(HaloClock * 2.4 + 1.2);
+		AuraScale.Scale = 1.04 + 0.06 * math.sin(HaloClock * 2.4);
+		Aura.BackgroundTransparency = 0.62 + 0.1 * math.sin(HaloClock * 2.4 + 1.2);
 		local A7 = 1 - math.exp(-DT * 7);
 		if math.abs(TargetP - ShownP) > 0.0005 then
 			ShownP = ShownP + (TargetP - ShownP) * A7;
