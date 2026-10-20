@@ -1803,6 +1803,8 @@ local function BuildSection(Host, SecOpts)
 			BindOpts = typeof(BindOpts) == "table" and BindOpts or {};
 			local BindMode = string.lower(tostring(BindOpts.Mode or "Toggle"));
 			local Key      = BindOpts.Default;
+			local BindFlag      = tostring(BindOpts.Flag or (Flag .. "_Key")); -- [MOBILE PATCH] obsidian-style key picker support
+			local BindOnChanged = typeof(BindOpts.OnChanged) == "function" and BindOpts.OnChanged or nil; -- [MOBILE PATCH] fires on rebind
 
 			local function KeyText(K)
 				if K == nil then return "None" end;
@@ -1894,6 +1896,7 @@ local function BuildSection(Host, SecOpts)
 								Listening = false;
 								if ListenConn then ListenConn:Disconnect(); ListenConn = nil end;
 								Refresh();
+								if BindOnChanged then BindOnChanged(Key) end; -- [MOBILE PATCH]
 								Library:NotifyKeybind();
 							end;
 						elseif T == Enum.UserInputType.MouseButton1
@@ -1903,6 +1906,7 @@ local function BuildSection(Host, SecOpts)
 							Listening = false;
 							if ListenConn then ListenConn:Disconnect(); ListenConn = nil end;
 							Refresh();
+							if BindOnChanged then BindOnChanged(Key) end; -- [MOBILE PATCH]
 							Library:NotifyKeybind();
 						end;
 					end);
@@ -1914,6 +1918,7 @@ local function BuildSection(Host, SecOpts)
 				if Listening then CancelListen() end;
 				Key = nil;
 				Refresh();
+				if BindOnChanged then BindOnChanged(Key) end; -- [MOBILE PATCH]
 				Library:NotifyKeybind();
 			end;
 			KBtn.MouseButton2Click:Connect(ClearBind);
@@ -1956,7 +1961,18 @@ local function BuildSection(Host, SecOpts)
 			Lbl.Size = UDim2.new(1, -20 - self._RightOffset, 1, 0);
 			self.Keybind        = KBtn;
 			self.KeybindDisplay = KLbl;
-			Library.Options[Flag .. "_Key"] = {
+			self.KeybindObj = { -- [MOBILE PATCH] programmatic access for obsidian-style key pickers
+				GetKey   = function() return Key end;
+				GetState = function() return State end;
+				SetKey   = function(K)
+					if Listening then CancelListen() end;
+					Key = K;
+					Refresh();
+					if BindOnChanged then BindOnChanged(Key) end;
+					Library:NotifyKeybind();
+				end;
+			};
+			Library.Options[BindFlag] = { -- [MOBILE PATCH] flag overridable via BindOpts.Flag
 				Save = function()
 					local Out = { _t = "Key" };
 					if typeof(Key) == "EnumItem" then
@@ -1976,6 +1992,7 @@ local function BuildSection(Host, SecOpts)
 					if Listening then CancelListen() end;
 					Key = NewKey;
 					Refresh();
+					if BindOnChanged then BindOnChanged(Key) end; -- [MOBILE PATCH]
 					Library:NotifyKeybind();
 				end;
 			};
@@ -4725,6 +4742,7 @@ end;
 		local Name     = tostring(Opts.Name or Opts.Title or Opts.Text or "Keybind");
 		local Mode     = string.lower(tostring(Opts.Mode or "Toggle"));
 		local Callback = typeof(Opts.Callback) == "function" and Opts.Callback or function() end;
+		local OnChanged = typeof(Opts.OnChanged) == "function" and Opts.OnChanged or nil; -- [MOBILE PATCH] fires whenever the bound key changes
 		local Flag     = tostring(Opts.Flag or Opts.Pointer or ("_" .. Name));
 		local Key      = Opts.Default;
 		local State    = false;
@@ -4844,6 +4862,7 @@ end;
 							Listening = false;
 							if ListenConn then ListenConn:Disconnect(); ListenConn = nil end;
 							Refresh();
+							if OnChanged then OnChanged(Key) end; -- [MOBILE PATCH]
 							Library:NotifyKeybind();
 						end;
 					elseif T == Enum.UserInputType.MouseButton1
@@ -4853,6 +4872,7 @@ end;
 						Listening = false;
 						if ListenConn then ListenConn:Disconnect(); ListenConn = nil end;
 						Refresh();
+						if OnChanged then OnChanged(Key) end; -- [MOBILE PATCH]
 						Library:NotifyKeybind();
 					end;
 				end);
@@ -5067,6 +5087,7 @@ end;
 			if Listening then CancelListen() end;
 			Key = K;
 			Refresh();
+			if OnChanged then OnChanged(Key) end; -- [MOBILE PATCH]
 		end;
 		Library.Options[Flag] = {
 			Save = function()
@@ -5277,6 +5298,9 @@ end;
 	return SecRef;
 end;
 
+-- [MOBILE PATCH] forward declaration: defined later, used by TabRef:ApplySettings
+local ApplySettingsContents = nil;
+
 function Library:Window(Opts)
 	Opts = typeof(Opts) == "table" and Opts or {};
 	local Width     = tonumber(Opts.Width)     or 400;
@@ -5396,9 +5420,24 @@ local TitleLogo = self:CreateInstance("ImageLabel", {
 	Size = UDim2.fromOffset(26,26);
 	BackgroundTransparency = 1;
 });
-TitleLogo.Image = getcustomasset("Hydrogen/logo2.png");
-
-Title.Position = UDim2.new(0, 5 + TitleLogo.AbsoluteSize.X + 4, 0, 9);
+-- [MOBILE PATCH] 自定义 Logo：Opts.Logo / Opts.Icon（rbxassetid、图片直链、本地路径，false = 隐藏）
+local LogoOpt = Opts.Logo;
+if LogoOpt == nil then LogoOpt = Opts.Icon end;
+if LogoOpt == nil then LogoOpt = Library._CustomLogo end;
+if LogoOpt == false then
+	TitleLogo.Visible = false;
+	Title.Position = UDim2.new(0, 6, 0, 9);
+else
+	local LogoAsset = Library._ResolveLogo and Library:_ResolveLogo(LogoOpt) or nil;
+	if LogoAsset then
+		TitleLogo.Image = LogoAsset;
+		table.insert(Library._LogoInstances or {}, TitleLogo);
+		Title.Position = UDim2.new(0, 5 + TitleLogo.AbsoluteSize.X + 4, 0, 9);
+	else
+		TitleLogo.Visible = false;
+		Title.Position = UDim2.new(0, 6, 0, 9);
+	end;
+end;
 
 	local Content = self:CreateInstance("Frame", {
 		Name             = "Content";
@@ -5772,6 +5811,15 @@ RegisterGradLerp(GradEntry)
 
 		function TabRef:Section(SecOpts)
 			return BuildSection({ Left = self.Left; Right = self.Right; Page = self.Page; Gui = Gui }, SecOpts);
+		end;
+
+		-- [MOBILE PATCH] settings is just a normal tab (Obsidian-style): call this on any
+		-- tab to fill it with the built-in settings content. All control handles and
+		-- actions land on Tab.SettingsControls for external use.
+		function TabRef:ApplySettings()
+			self.SettingsControls = ApplySettingsContents(self);
+			Library._SettingsTab = self;
+			return self;
 		end;
 
 		local WinRef = self;
@@ -6212,7 +6260,21 @@ local Logo = self:CreateInstance("ImageLabel", {
 	BackgroundTransparency = 1;
 });
 
-	Logo.Image = getcustomasset("Hydrogen/logo2.png");
+	-- [MOBILE PATCH] 自定义水印 Logo：Opts.Logo / Opts.Icon（rbxassetid、图片直链、本地路径，false = 隐藏）
+	local WmLogoOpt = Opts.Logo;
+	if WmLogoOpt == nil then WmLogoOpt = Opts.Icon end;
+	if WmLogoOpt == nil then WmLogoOpt = self._CustomLogo end;
+	local WmHideLogo = (WmLogoOpt == false);
+	if not WmHideLogo then
+		local WmLogoAsset = self._ResolveLogo and self:_ResolveLogo(WmLogoOpt) or nil;
+		if WmLogoAsset then
+			Logo.Image = WmLogoAsset;
+			table.insert(self._LogoInstances or {}, Logo);
+		else
+			WmHideLogo = true;
+		end;
+	end;
+	Logo.Visible = not WmHideLogo;
 
 	local Lbl = self:CreateInstance("TextLabel", {
 		Name                   = "Label";
@@ -6229,6 +6291,7 @@ local Logo = self:CreateInstance("ImageLabel", {
 		TextYAlignment         = Enum.TextYAlignment.Center;
 	});
 	if ProggyCleanFont then Lbl.FontFace = ProggyCleanFont end;
+	if WmHideLogo then Lbl.Position = UDim2.new(0, 0, 0.5, 0) end; -- [MOBILE PATCH] logo hidden: text hugs the left edge
 
 	self:Draggable(Frame);
 
@@ -6964,10 +7027,10 @@ function Library:Playerlist(Opts)
 	return Obj;
 end;
 
--- [MOBILE PATCH] shared settings contents builder: used by BOTH the legacy floating
--- SettingsWindow (PC) and the in-window Settings tab (mobile default). Everything
--- routes through self:Section(...), so either host can serve it unchanged.
-local function ApplySettingsContents(self)
+-- [MOBILE PATCH] settings contents builder for the in-window Settings tab (all platforms).
+-- Everything routes through self:Section(...); returns a Controls table with every
+-- control handle + action so scripts can drive the settings externally.
+ApplySettingsContents = function(self)
 		local ConfigDir    = Library.Directory .. "/Configs";
 		local ThemeDir     = Library.Directory .. "/Themes";
 		local AutoLoadFile = Library.Directory .. "/Autoload.txt";
@@ -7002,8 +7065,79 @@ local function ApplySettingsContents(self)
 			return Out;
 		end;
 
+		local ConfigList, ThemeList; -- [MOBILE PATCH] forward decls: action helpers close over them
+
+		-- [MOBILE PATCH] every settings action as a reusable function — the buttons below
+		-- call these, and they are exposed externally via Settings.Controls (see the
+		-- bottom of this function).
+		local function ActionSaveConfig(Nm)
+			Nm = Nm or Library.Flags.ConfigName;
+			if not Nm or Nm == "" then Library:Notify("Enter a config name first", 3); return false end;
+			Library:SaveConfig(Nm);
+			ConfigList:SetOptions(ListConfigs());
+			Library:Notify("Saved config: " .. Nm, 3);
+			return true;
+		end;
+		local function ActionLoadConfig(Nm)
+			Nm = Nm or ConfigList:Get();
+			local Ok, Err = Library:LoadConfig(Nm);
+			if Ok then Library:Notify("Loaded: " .. Nm, 3) else Library:Notify(Err, 3) end;
+			return Ok;
+		end;
+		local function ActionDeleteConfig(Nm)
+			Nm = Nm or ConfigList:Get();
+			local Path = ConfigDir .. "/" .. Nm .. ".json";
+			if isfile and isfile(Path) then delfile(Path) end;
+			ConfigList:SetOptions(ListConfigs());
+			Library:Notify("Deleted: " .. Nm, 3);
+		end;
+		local function ActionRefreshConfigs()
+			ConfigList:SetOptions(ListConfigs());
+			Library:Notify("Refreshed configs", 2);
+		end;
+		local function ActionSetAutoLoad(Nm)
+			Nm = Nm or ConfigList:Get();
+			writefile(AutoLoadFile, Nm);
+			Library:Notify("Auto-load: " .. Nm, 3);
+		end;
+		local function ActionClearAutoLoad()
+			if isfile and isfile(AutoLoadFile) then writefile(AutoLoadFile, "") end;
+			Library:Notify("Auto-load cleared", 3);
+		end;
+		local function ActionSaveTheme(Nm)
+			Nm = Nm or Library.Flags.ThemeName;
+			if not Nm or Nm == "" then Library:Notify("Enter a theme name", 3); return false end;
+			writefile(ThemeDir .. "/" .. Nm .. ".json", HttpService:JSONEncode({ Accent = Library.Accent:ToHex() }));
+			ThemeList:SetOptions(ListThemes());
+			Library:Notify("Saved theme: " .. Nm, 3);
+			return true;
+		end;
+		local function ActionLoadTheme(Nm)
+			Nm = Nm or ThemeList:Get();
+			local Path = ThemeDir .. "/" .. Nm .. ".json";
+			if not (isfile and isfile(Path)) then Library:Notify("Theme not found", 3); return false end;
+			local Ok, Data = pcall(HttpService.JSONDecode, HttpService, readfile(Path));
+			if Ok and Data.Accent then
+				Library:SetAccent(Color3.fromHex(Data.Accent));
+				Library:Notify("Loaded theme: " .. Nm, 3);
+				return true;
+			end;
+			return false;
+		end;
+		local function ActionDeleteTheme(Nm)
+			Nm = Nm or ThemeList:Get();
+			local Path = ThemeDir .. "/" .. Nm .. ".json";
+			if isfile and isfile(Path) then delfile(Path) end;
+			ThemeList:SetOptions(ListThemes());
+			Library:Notify("Deleted theme: " .. Nm, 3);
+		end;
+		local function ActionRefreshThemes()
+			ThemeList:SetOptions(ListThemes());
+			Library:Notify("Refreshed themes", 2);
+		end;
+
 		local SecCfg = self:Section({ Name = "Configuration", Side = "Left" });
-		local ConfigList = SecCfg:List({
+		ConfigList = SecCfg:List({
 			Name    = "Configs";
 			Options = ListConfigs();
 			Default = "default";
@@ -7012,54 +7146,25 @@ local function ApplySettingsContents(self)
 		SecCfg:Textbox({ Name = "Config Name", Flag = "ConfigName", Placeholder = "name..." });
 		SecCfg:Button({
 			Name = "Save";
-			Callback = function()
-				local Nm = Library.Flags.ConfigName;
-				if not Nm or Nm == "" then Library:Notify("Enter a config name first", 3); return end;
-				Library:SaveConfig(Nm);
-				ConfigList:SetOptions(ListConfigs());
-				Library:Notify("Saved config: " .. Nm, 3);
-			end;
+			Callback = function() ActionSaveConfig() end;
 		}):Button({
 			Name = "Load";
-			Callback = function()
-				local Nm = ConfigList:Get();
-				local Ok, Err = Library:LoadConfig(Nm);
-				if Ok then
-					Library:Notify("Loaded: " .. Nm, 3);
-				else
-					Library:Notify(Err, 3);
-				end;
-			end;
+			Callback = function() ActionLoadConfig() end;
 		});
 		SecCfg:Button({
 			Name = "Delete"; Confirm = true;
-			Callback = function()
-				local Nm = ConfigList:Get();
-				local Path = ConfigDir .. "/" .. Nm .. ".json";
-				if isfile and isfile(Path) then delfile(Path) end;
-				ConfigList:SetOptions(ListConfigs());
-				Library:Notify("Deleted: " .. Nm, 3);
-			end;
+			Callback = function() ActionDeleteConfig() end;
 		}):Button({
 			Name = "Refresh";
-			Callback = function()
-				ConfigList:SetOptions(ListConfigs());
-				Library:Notify("Refreshed configs", 2);
-			end;
+			Callback = function() ActionRefreshConfigs() end;
 		});
 		SecCfg:Button({
 			Name = "Set As Auto Load";
-			Callback = function()
-				writefile(AutoLoadFile, ConfigList:Get());
-				Library:Notify("Auto-load: " .. ConfigList:Get(), 3);
-			end;
+			Callback = function() ActionSetAutoLoad() end;
 		});
 		SecCfg:Button({
 			Name = "Remove Auto Load"; Confirm = true;
-			Callback = function()
-				if isfile and isfile(AutoLoadFile) then writefile(AutoLoadFile, "") end;
-				Library:Notify("Auto-load cleared", 3);
-			end;
+			Callback = function() ActionClearAutoLoad() end;
 		});
 		SecCfg:Button({
 			Name = "Test Notification";
@@ -7089,7 +7194,7 @@ local function ApplySettingsContents(self)
 			Callback = function(V) Library.AnimationSpeed = V end;
 		});
 		-- [MOBILE PATCH] touch-device controls: UI scale, lite mode, floating button
-		SecMenu:Slider({
+		local UIScaleSlider = SecMenu:Slider({
 			Name = "UI Scale"; Flag = "MobileUIScale";
 			Min = 50; Max = 300; Step = 5; Decimals = 0; Suffix = "%";
 			Default = math.clamp(math.floor((Library._UIScaleValue or 1) * 100 + 0.5), 50, 300);
@@ -7104,34 +7209,42 @@ local function ApplySettingsContents(self)
 				Library:Notify("UI scale: auto", 2);
 			end;
 		});
-		SecMenu:Toggle({
+		local LiteToggle = SecMenu:Toggle({
 			Name = "Lite Animations"; Flag = "MobileLiteAnim";
 			Default = Library._ReduceAnimations == true;
 			Tooltip = "Disables heavy animations; recommended on phones";
 			Callback = function(S) Library:SetReduceAnimations(S) end;
 		});
-		SecMenu:Toggle({
-			Name = "Floating Menu Button"; Flag = "MobileMenuBtn";
-			Default = Library.MobileMenuButton ~= nil;
-			Tooltip = "Shows the on-screen Toggle UI / Lock UI buttons";
-			Callback = function(S)
-				if S then
-					local B = Library.CreateMobileMenuButton and Library:CreateMobileMenuButton();
-					if B then B:Show() end;
-				elseif Library.MobileMenuButton then
-					Library.MobileMenuButton:Hide();
+		-- [MOBILE PATCH] floating pills are a mobile-only affordance: PC never gets the
+		-- toggle row, never auto-creates them, and the default stays off.
+		local MenuBtnToggle = nil; -- [MOBILE PATCH] mobile-only row; stays nil on PC
+		if IsMobilePlatform then
+			MenuBtnToggle = SecMenu:Toggle({
+				Name = "Floating Menu Button"; Flag = "MobileMenuBtn";
+				Default = Library.MobileMenuButton ~= nil;
+				Tooltip = "Shows the on-screen Toggle UI / Lock UI buttons";
+				Callback = function(S)
+					if S then
+						local B = Library.CreateMobileMenuButton and Library:CreateMobileMenuButton();
+						if B then B:Show() end;
+					elseif Library.MobileMenuButton then
+						Library.MobileMenuButton:Hide();
+					end;
 				end;
-			end;
-		});
-		SecMenu:Keybind({
+			});
+		end;
+		local MenuKeybindRow = SecMenu:Keybind({
 			Name     = "Menu Keybind";
 			Default  = Enum.KeyCode.RightShift;
 			Mode     = "Always";
-			Callback = function() local Win = Library.CurrentlyOpen; if Win then Win:Toggle() end end;
+			-- [MOBILE PATCH] the actual toggle lives in the global Library.MenuKeybind
+			-- listener (works even if settings are never built); this row only rebinds it.
+			Callback  = function() end;
+			OnChanged = function(K) Library.MenuKeybind = K end;
 		});
 
 		local SecHud = self:Section({ Name = "HUD", Side = "Right" });
-		SecHud:Toggle({
+		local WatermarkToggle = SecHud:Toggle({
 			Name     = "Watermark", Default = true;
 			Callback = function(S) if Library._Watermark then Library._Watermark.Gui.Enabled = S end end;
 		});
@@ -7143,7 +7256,7 @@ local function ApplySettingsContents(self)
 			Default = { "Title", "Fps", "Ping","Game Name","Date" };
 		});
 		SecHud:Slider({ Name = "Refresh Rate", Flag = "WatermarkRate", Min = 0, Max = 2, Step = 0.05, Decimals = 2, Default = 0.1 });
-		SecHud:Toggle({
+		local KeybindListToggle = SecHud:Toggle({
 			Name     = "Keybind List", Default = true;
 			Callback = function(S) if Library._KeybindList then Library._KeybindList.Gui.Enabled = S end end;
 		});
@@ -7195,14 +7308,14 @@ local function ApplySettingsContents(self)
 		end;
 
 		local SecTheme = self:Section({ Name = "Theming", Side = "Right" });
-		SecTheme:Colorpicker({
+		local AccentPicker = SecTheme:Colorpicker({
 			Name     = "Accent"; Flag = "Accent";
 			Default  = Library.Accent;
 			Alpha    = 1;
 			Callback = function(C) Library:SetAccent(C) end;
 		});
 		SecTheme:Textbox({ Name = "Theme Name", Flag = "ThemeName", Placeholder = "theme name..." });
-		local ThemeList = SecTheme:List({
+		ThemeList = SecTheme:List({
 			Name    = "Themes";
 			Options = ListThemes();
 			Default = "default";
@@ -7210,42 +7323,17 @@ local function ApplySettingsContents(self)
 		});
 		SecTheme:Button({
 			Name = "Save";
-			Callback = function()
-				local Nm = Library.Flags.ThemeName;
-				if not Nm or Nm == "" then Library:Notify("Enter a theme name", 3); return end;
-				local Save = { Accent = Library.Accent:ToHex() };
-				writefile(ThemeDir .. "/" .. Nm .. ".json", HttpService:JSONEncode(Save));
-				ThemeList:SetOptions(ListThemes());
-				Library:Notify("Saved theme: " .. Nm, 3);
-			end;
+			Callback = function() ActionSaveTheme() end;
 		}):Button({
 			Name = "Load";
-			Callback = function()
-				local Nm = ThemeList:Get();
-				local Path = ThemeDir .. "/" .. Nm .. ".json";
-				if not (isfile and isfile(Path)) then Library:Notify("Theme not found", 3); return end;
-				local Ok, Data = pcall(HttpService.JSONDecode, HttpService, readfile(Path));
-				if Ok and Data.Accent then
-					Library:SetAccent(Color3.fromHex(Data.Accent));
-					Library:Notify("Loaded theme: " .. Nm, 3);
-				end;
-			end;
+			Callback = function() ActionLoadTheme() end;
 		});
 		SecTheme:Button({
 			Name = "Delete"; Confirm = true;
-			Callback = function()
-				local Nm = ThemeList:Get();
-				local Path = ThemeDir .. "/" .. Nm .. ".json";
-				if isfile and isfile(Path) then delfile(Path) end;
-				ThemeList:SetOptions(ListThemes());
-				Library:Notify("Deleted theme: " .. Nm, 3);
-			end;
+			Callback = function() ActionDeleteTheme() end;
 		}):Button({
 			Name = "Refresh";
-			Callback = function()
-				ThemeList:SetOptions(ListThemes());
-				Library:Notify("Refreshed themes", 2);
-			end;
+			Callback = function() ActionRefreshThemes() end;
 		});
 
 		task.delay(0.5, function()
@@ -7257,7 +7345,39 @@ local function ApplySettingsContents(self)
 			end;
 		end);
 
-		return self;
+		-- [MOBILE PATCH] external access: every control handle + every action,
+		-- reachable via Settings.Controls after Settings:ApplySettings().
+		local Controls = {
+			Sections = {
+				Configuration = SecCfg;
+				Menu          = SecMenu;
+				HUD           = SecHud;
+				Theming       = SecTheme;
+			};
+			-- list controls (support :Get() / :SetOptions(...))
+			ConfigList = ConfigList;
+			ThemeList  = ThemeList;
+			-- individual controls (toggles/sliders support :Set(v), keybind :SetKey(k))
+			Watermark       = WatermarkToggle;
+			KeybindList     = KeybindListToggle;
+			UIScale         = UIScaleSlider;
+			LiteAnimations  = LiteToggle;
+			MenuKeybind     = MenuKeybindRow;
+			Accent          = AccentPicker;
+			FloatingButton  = MenuBtnToggle; -- nil on PC
+			-- actions (same code the buttons run)
+			SaveConfig      = ActionSaveConfig;
+			LoadConfig      = ActionLoadConfig;
+			DeleteConfig    = ActionDeleteConfig;
+			RefreshConfigs  = ActionRefreshConfigs;
+			SetAutoLoad     = ActionSetAutoLoad;
+			ClearAutoLoad   = ActionClearAutoLoad;
+			SaveTheme       = ActionSaveTheme;
+			LoadTheme       = ActionLoadTheme;
+			DeleteTheme     = ActionDeleteTheme;
+			RefreshThemes   = ActionRefreshThemes;
+		};
+		return Controls;
 end;
 
 -- [MOBILE PATCH] Settings as an in-window tab (LinoriaLib "UI Settings"-style).
@@ -7266,17 +7386,25 @@ end;
 function Library:SettingsTab(Window, Opts)
 	Opts = typeof(Opts) == "table" and Opts or {};
 	Window = Window or Opts.Window or Library.CurrentlyOpen;
-	assert(Window and Window.Tab, "SettingsTab: no window to attach to");
-	local Tab = Window:Tab({ Name = tostring(Opts.TabName or Opts.Name or Opts.Title or "Settings") });
+	assert(Window and Window.Tab, "SettingsTab/SettingsWindow: no window to attach to — create a Library:Window(...) first (or pass Window = win)");
+	-- [MOBILE PATCH] Opts.Tab: fill an EXISTING tab instead of creating a new one
+	local Tab = (Opts.Tab and Opts.Tab.Section) and Opts.Tab
+		or Window:Tab({ Name = tostring(Opts.TabName or Opts.Name or Opts.Title or "Settings") });
 
-	local Obj = { _Tab = Tab, _Window = Window, _Visible = true, Gui = nil, Outer = nil };
+	local Obj = { _Tab = Tab, _Window = Window, _Visible = true, Gui = nil, Outer = nil, Controls = nil };
 
 	function Obj:Section(SecOpts)
 		return Tab:Section(SecOpts);
 	end;
 
+	-- [MOBILE PATCH] builds the contents and exposes every handle for external use:
+	-- Settings.Controls / Tab.SettingsControls hold ConfigList, UIScale, Accent, ... plus
+	-- actions (SaveConfig / LoadConfig / SaveTheme / LoadTheme / RefreshConfigs / ...).
 	function Obj:ApplySettings()
-		return ApplySettingsContents(self);
+		self.Controls = ApplySettingsContents(self);
+		Tab.SettingsControls = self.Controls;
+		Library._SettingsTab = Tab;
+		return self;
 	end;
 
 	-- the tab rides inside the window; "showing" it means jumping straight to it
@@ -7299,279 +7427,21 @@ function Library:SettingsTab(Window, Opts)
 	return Obj;
 end;
 
+-- [MOBILE PATCH] Settings is ALWAYS an in-window tab now (every platform) — the legacy
+-- floating settings window is gone. Same call signature as before; the host window
+-- defaults to the currently open one. The returned object still supports Section /
+-- ApplySettings / SetVisible / SyncWithWindow / PositionNextTo / Destroy (the last two
+-- are safe no-ops), so existing scripts need no changes.
 function Library:SettingsWindow(Opts)
 	Opts = typeof(Opts) == "table" and Opts or {};
-	-- [MOBILE PATCH] touch devices: settings live in an in-window "Settings" tab instead of
-	-- a floating window that cannot fit next to the fullscreen menu (LinoriaLib "UI Settings"
-	-- spirit). Pass Floating = true to force the legacy floating window.
-	if IsMobilePlatform and Opts.Floating ~= true then
-		local Win = Opts.Window or Library.CurrentlyOpen;
-		if Win and Win.Tab then
-			return Library:SettingsTab(Win, Opts);
-		end;
-	end;
-	local Title = tostring(Opts.Title or "Settings");
-	local Width = tonumber(Opts.Width) or 240;
-	local Height = tonumber(Opts.Height) or 400;
-	Width, Height = ClampWindowSize(Width, Height); -- [MOBILE PATCH]
-	if IsMobilePlatform then -- [MOBILE PATCH] floating fallback: never exceed the screen
-		local Cam = workspace.CurrentCamera;
-		local Vp  = (Cam and Cam.ViewportSize) or Vector2.new(800, 600);
-		Width  = math.min(Width, math.max(math.floor(Vp.X) - 10, 200));
-		Height = math.clamp(math.floor(Vp.Y) - 35, 200, 600);
-	end;
+	return Library:SettingsTab(Opts.Window or Library.CurrentlyOpen, Opts);
+end;
 
-	local Gui = self:CreateInstance("ScreenGui", {
-		Name           = "SettingsGui";
-		Parent         = (gethui and gethui()) or CoreGui;
-		IgnoreGuiInset = true;
-		ResetOnSpawn   = false;
-		ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
-	});
-
-	local Outer = self:CreateInstance("Frame", {
-		Name             = "Outer";
-		Parent           = Gui;
-		AnchorPoint      = Vector2.new(1, 0);
-		Position         = UDim2.fromOffset(0, 0);
-		Size             = UDim2.fromOffset(Width, Height);
-		BackgroundColor3 = Color3.fromHex("FFFFFF");
-		BorderSizePixel  = 0;
-	});
-	Library:AddGlowingV2(Outer,Library.Accent,0.4)
-
-	self:CreateInstance("UIGradient", {
-		Parent   = Outer;
-		Rotation = 90;
-		Color    = NewColorSequence({
-			NewColorSequenceKeypoint(0, Color3.fromHex("212121"));
-			NewColorSequenceKeypoint(1, Color3.fromHex("1A1A1A"));
-		});
-	});
-	self:CreateInstance("UIStroke", {
-		Parent          = Outer;
-		Color           = Color3.fromHex("000000");
-		Thickness       = 1;
-		ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
-		LineJoinMode    = Enum.LineJoinMode.Miter;
-	});
-
-	local InnerOutline = self:CreateInstance("Frame", {
-		Parent                 = Outer;
-		Position               = UDim2.new(0, 1, 0, 1);
-		Size                   = UDim2.new(1, -2, 1, -2);
-		BackgroundTransparency = 1;
-		BorderSizePixel        = 0;
-	});
-	self:CreateInstance("UIStroke", {
-		Parent          = InnerOutline;
-		Color           = Color3.fromHex("393939");
-		Thickness       = 1;
-		ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
-		LineJoinMode    = Enum.LineJoinMode.Miter;
-	});
-
-	local TopLine = self:CreateInstance("Frame", {
-		Parent           = Outer;
-		Position         = UDim2.new(0, 1, 0, 1);
-		Size             = UDim2.new(1, -2, 0, 1);
-		BackgroundColor3 = Color3.fromHex("FFFFFF");
-		BorderSizePixel  = 0;
-		ZIndex           = 10;
-	});
-	Library:RegisterAccentGradient(self:CreateInstance("UIGradient", {
-		Parent = TopLine; Rotation = 0;
-	}));
-
-	local TitleLbl = self:CreateInstance("TextLabel", {
-		Parent                 = Outer;
-		Position               = UDim2.new(0, 6, 0, 9);
-		Size                   = UDim2.new(0, 200, 0, 18);
-		BackgroundTransparency = 1;
-		Text                   = Title;
-		TextColor3             = Color3.fromHex("FFFFFF");
-		TextSize               = 12;
-		TextXAlignment         = Enum.TextXAlignment.Left;
-		TextYAlignment         = Enum.TextYAlignment.Center;
-	});
-	if ProggyCleanFont then TitleLbl.FontFace = ProggyCleanFont end;
-
-	local Content = self:CreateInstance("Frame", {
-		Name             = "Content";
-		Parent           = Outer;
-		Position         = UDim2.new(0, 5, 0, 34);
-		Size             = UDim2.new(1, -10, 1, -39);
-		BackgroundColor3 = Color3.fromHex("FFFFFF");
-		BorderSizePixel  = 0;
-	});
-	self:CreateInstance("UIGradient", {
-		Parent   = Content;
-		Rotation = 90;
-		Color    = NewColorSequence({
-			NewColorSequenceKeypoint(0, Color3.fromHex("161616"));
-			NewColorSequenceKeypoint(1, Color3.fromHex("101010"));
-		});
-	});
-
-	local function ContentEdge(Anchor, Pos, Sz, Color)
-		self:CreateInstance("Frame", {
-			Parent           = Content;
-			AnchorPoint      = Anchor;
-			Position         = Pos;
-			Size             = Sz;
-			BackgroundColor3 = Color3.fromHex(Color);
-			BorderSizePixel  = 0;
-			ZIndex           = 10;
-		});
-	end;
-	ContentEdge(Vector2.new(0,0), UDim2.new(0,0,0,0),   UDim2.new(0,1,1,0),   "000000");
-	ContentEdge(Vector2.new(0,0), UDim2.new(0,1,0,1),   UDim2.new(0,1,1,-2),  "393939");
-	ContentEdge(Vector2.new(1,0), UDim2.new(1,0,0,0),   UDim2.new(0,1,1,0),   "000000");
-	ContentEdge(Vector2.new(1,0), UDim2.new(1,-1,0,1),  UDim2.new(0,1,1,-2),  "393939");
-	ContentEdge(Vector2.new(0,1), UDim2.new(0,0,1,0),   UDim2.new(1,0,0,1),   "000000");
-	ContentEdge(Vector2.new(0,1), UDim2.new(0,1,1,-1),  UDim2.new(1,-2,0,1),  "393939");
-
-	local Page = self:CreateInstance("Frame", {
-		Name                   = "Page";
-		Parent                 = Content;
-		Position               = UDim2.new(0, 2, 0, 2);
-		Size                   = UDim2.new(1, -4, 1, -4);
-		BackgroundTransparency = 1;
-		BorderSizePixel        = 0;
-	});
-	self:CreateInstance("UIPadding", {
-		Parent        = Page;
-		PaddingLeft   = UDim.new(0, 6);
-		PaddingRight  = UDim.new(0, 6);
-		PaddingTop    = UDim.new(0, 9);
-		PaddingBottom = UDim.new(0, 4);
-	});
-
-	local Column = self:CreateInstance("ScrollingFrame", {
-		Name                   = "Column";
-		Parent                 = Page;
-		Position               = UDim2.new(0, 0, 0, -2);
-		Size                   = UDim2.new(1, 0, 1, 2);
-		BackgroundTransparency = 1;
-		BorderSizePixel        = 0;
-		CanvasSize             = UDim2.new(0, 0, 0, 0);
-		AutomaticCanvasSize    = Enum.AutomaticSize.Y;
-		ScrollBarThickness     = 2;
-		ScrollBarImageColor3   = Library.Accent;
-		ScrollingDirection     = Enum.ScrollingDirection.Y;
-		ClipsDescendants       = true;
-	});
-	Library:RegisterAccent(Column, "ScrollBarImageColor3");
-	Library:_AttachScrollbar(Column); -- [MOBILE PATCH] slim custom scrollbar
-	self:CreateInstance("UIListLayout", {
-		Parent        = Column;
-		FillDirection = Enum.FillDirection.Vertical;
-		SortOrder     = Enum.SortOrder.LayoutOrder;
-		Padding       = UDim.new(0, 6);
-	});
-	self:CreateInstance("UIPadding", {
-		Parent        = Column;
-		PaddingTop    = UDim.new(0, 4);
-		PaddingBottom = UDim.new(0, 6);
-	});
-
-	self:Draggable(Outer);
-
-	local Host = { Left = Column, Right = Column, Page = Page, Gui = Gui };
-
-	local FadeOriginals = nil;
-	local ActiveFade = nil; -- [MOBILE PATCH] in-flight single-driver fade connection
-
-	local function CaptureFade()
-		local Map = {};
-		local Types = {
-			Frame = {"BackgroundTransparency"};
-			TextLabel = {"BackgroundTransparency","TextTransparency"};
-			TextButton = {"BackgroundTransparency","TextTransparency"};
-			TextBox = {"BackgroundTransparency","TextTransparency"};
-			ImageLabel = {"BackgroundTransparency","ImageTransparency"};
-			ImageButton = {"BackgroundTransparency","ImageTransparency"};
-			ScrollingFrame = {"BackgroundTransparency"};
-			UIStroke = {"Transparency"};
-		};
-		local function Cap(Inst)
-			local Props = Types[Inst.ClassName];
-			if not Props then return end;
-			local PMap = {};
-			for _, P in Props do
-				local Ok, V = pcall(function() return Inst[P] end);
-				if Ok then PMap[P] = V end;
-			end;
-			Map[Inst] = PMap;
-		end;
-		Cap(Outer);
-		for _, D in Outer:GetDescendants() do Cap(D) end;
-		return Map;
-	end;
-
-	local Obj = { Gui = Gui, Outer = Outer, _Visible = true };
-
-	function Obj:Section(SecOpts)
-		return BuildSection(Host, SecOpts);
-	end;
-
-	function Obj:ApplySettings()
-		return ApplySettingsContents(self);
-	end;
-
-	function Obj:SetVisible(State)
-		if self._Visible == State then return end;
-		self._Visible = State;
-		if Library._ReduceAnimations then Gui.Enabled = State and true or false; return end; -- [MOBILE PATCH] lite mode: instant toggle
-		-- [MOBILE PATCH] single-driver fade: one RenderStepped connection lerps the whole
-		-- window from CURRENT values (no tween burst, reversing mid-fade is seamless).
-		if ActiveFade then ActiveFade:Disconnect(); ActiveFade = nil end;
-		if not State then
-			FadeOriginals = Library:_RefreshFadeMap(FadeOriginals, CaptureFade());
-		elseif not FadeOriginals then
-			FadeOriginals = CaptureFade();
-		end;
-		if State then
-			Gui.Enabled = true;
-			ActiveFade = Library:_FadeGroup(FadeOriginals, "in", 0.22, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
-		else
-			ActiveFade = Library:_FadeGroup(FadeOriginals, "out", 0.18, Enum.EasingStyle.Sine, Enum.EasingDirection.Out, function()
-				if not self._Visible then Gui.Enabled = false end;
-			end);
-		end;
-	end;
-
-	function Obj:SyncWithWindow(Window)
-		local OrigSetVisible = Window.SetVisible;
-		Window.SetVisible = function(Win, State)
-			OrigSetVisible(Win, State);
-			self:SetVisible(State);
-		end;
-		local OrigToggle = Window.Toggle;
-		Window.Toggle = function(Win)
-			OrigToggle(Win);
-			self:SetVisible(Win.Visible);
-		end;
-	end;
-
-	function Obj:PositionNextTo(Window)
-		local WinOuter = Window.Outer;
-		if not WinOuter then return end;
-		local function UpdatePos()
-			local WinPos  = WinOuter.AbsolutePosition;
-			local WinSize = WinOuter.AbsoluteSize;
-			Outer.AnchorPoint = Vector2.new(1, 0);
-			-- FIX: ui frame alignment issue with GuiInset
-			Outer.Position = UDim2.fromOffset(WinPos.X - 2, WinPos.Y + GuiInset);
-		end;
-		task.defer(UpdatePos);
-		WinOuter:GetPropertyChangedSignal("AbsolutePosition"):Connect(UpdatePos);
-		WinOuter:GetPropertyChangedSignal("AbsoluteSize"):Connect(UpdatePos);
-	end;
-
-	function Obj:Destroy() Gui:Destroy() end;
-	Library._SettingsWindow = Obj;
-	return Obj;
+-- [MOBILE PATCH] external access to the settings: the SettingsTab object if the legacy
+-- call was used, otherwise the tab that ran :ApplySettings() (controls on .Controls /
+-- .SettingsControls respectively)
+function Library:GetSettings()
+	return Library._SettingsWindow or Library._SettingsTab;
 end;
 
 function Library:_BuildPreview(Parent, Opts)
@@ -10264,6 +10134,22 @@ Library.CantDragForced = false; -- [MOBILE PATCH] "Lock UI" pill freezes window 
 Library.CanDrag = true;         -- [MOBILE PATCH] false while scrolling / dropdown open (Unnamed-style)
 Library.IsDragging = false;     -- [MOBILE PATCH] true during any window drag
 
+-- [MOBILE PATCH] default menu toggle key: RightShift on every platform, works out of the
+-- box even when the settings UI is never built. The settings "Menu Keybind" row rebinds
+-- this via OnChanged (its own Callback is intentionally a no-op so the key never
+-- double-toggles the window).
+Library.MenuKeybind = Enum.KeyCode.RightShift;
+Library:Connection(UserInputService.InputBegan, function(Input, GameProc)
+	if GameProc then return end;
+	if Input.UserInputType ~= Enum.UserInputType.Keyboard then return end;
+	if UserInputService:GetFocusedTextBox() then return end;
+	local K = Library.MenuKeybind;
+	if K == nil or typeof(K) ~= "EnumItem" or K.EnumType ~= Enum.KeyCode then return end;
+	if Input.KeyCode ~= K then return end;
+	local Win = Library.CurrentlyOpen;
+	if Win then Win:Toggle() end;
+end);
+
 function Library:SetReduceAnimations(B)
 	Library._ReduceAnimations = B and true or false;
 end;
@@ -10627,6 +10513,840 @@ do
 		task.defer(ClampAllWindows);
 		task.delay(0.5, ClampAllWindows); -- catch windows created right after load
 	end;
+end;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- [MOBILE PATCH] Obsidian / Linoria 风格简便 API（纯兼容层，叠加在原 API 之上）
+--
+--   local Window = Library:CreateWindow({ Title = "coincide", Size = UDim2.fromOffset(550, 600) })
+--   local Tabs   = { Main = Window:AddTab("Main") }
+--   local Box    = Tabs.Main:AddLeftGroupbox("aimbot")
+--   Box:AddToggle("Aimbot", { Text = "aimbot", Default = false, Callback = function(V) end })
+--      :AddColorPicker("AimbotColor", { Default = Color3.fromRGB(255, 0, 0), Transparency = 0 })
+--   Library.Toggles.Aimbot.Value / :SetValue(true) / :OnChanged(function(V) end)
+--   Library.Options.AimbotColor.Value / :SetValueRGB(C, T) / :OnChanged(function(C) end)
+-- 原有写法（Window:Tab / Tab:Section / Sec:Toggle ...）完全不受影响。
+-- ════════════════════════════════════════════════════════════════════════════
+do
+	Library.Toggles = Library.Toggles or {};
+
+	local function FireCbs(Cbs, ...)
+		for _, Fn in ipairs(Cbs) do task.spawn(Fn, ...) end;
+	end;
+
+	local MouseAliases = { MB1 = "MouseButton1", MB2 = "MouseButton2", MB3 = "MouseButton3" };
+	local function KeyFromString(K)
+		if typeof(K) == "EnumItem" then return K end;
+		if typeof(K) ~= "string" then return nil end;
+		local Ok, E = pcall(function() return Enum.KeyCode[K] end);
+		if Ok and E then return E end;
+		local Ok2, E2 = pcall(function() return Enum.UserInputType[MouseAliases[K] or K] end);
+		if Ok2 and E2 then return E2 end;
+		return nil;
+	end;
+	local function KeyToString(K)
+		if typeof(K) == "EnumItem" then
+			return (Library.KeyNames and Library.KeyNames[K]) or K.Name;
+		end;
+		return "None";
+	end;
+	Library.KeyFromString = KeyFromString;
+
+	-- Notify 支持 Obsidian 的表格式调用：Library:Notify({ Title=..., Description=..., Time=... })
+	local RawNotify = Library.Notify;
+	Library.Notify = function(self, A, B, C)
+		if typeof(A) == "table" then
+			return RawNotify(self, A.Description or A.Text or A.Content or "", A.Time or A.Duration or B, C);
+		end;
+		return RawNotify(self, A, B, C);
+	end;
+
+	-- 把控件包装成 Obsidian 风格代理（.Value / :SetValue / :OnChanged），
+	-- 代理同时带上 Save/Load 并覆盖 Library.Options[Idx] —— 直接委托给构造器写好的
+	-- 配置条目，因此配置保存/加载完全不受影响。
+	local function NewColorProxy(Opts)
+		Opts = typeof(Opts) == "table" and Opts or {};
+		local Tr = math.clamp(tonumber(Opts.Transparency) or 0, 0, 1);
+		local Default = typeof(Opts.Default) == "Color3" and Opts.Default or Color3.fromRGB(255, 255, 255);
+		local CProxy = { Type = "ColorPicker", Value = Default, Transparency = Tr, _Cbs = {} };
+		local UserCb = typeof(Opts.Callback) == "function" and Opts.Callback or nil;
+		local Cb = function(C, A)
+			CProxy.Value = C; CProxy.Transparency = 1 - A;
+			if UserCb then UserCb(C) end;
+			FireCbs(CProxy._Cbs, C);
+		end;
+		return CProxy, Tr, Default, Cb;
+	end;
+
+	local function WrapColorProxy(Idx, Entry, CProxy)
+		CProxy.Save = function() return Entry.Save() end;
+		CProxy.Load = function(Data) Entry.Load(Data) end;
+		function CProxy:SetValue(C)
+			Entry.Load({ _t = "Color", v = C:ToHex(), a = 1 - (self.Transparency or 0) });
+		end;
+		function CProxy:SetValueRGB(C, Tr)
+			if Tr ~= nil then self.Transparency = math.clamp(tonumber(Tr) or 0, 0, 1) end;
+			Entry.Load({ _t = "Color", v = C:ToHex(), a = 1 - self.Transparency });
+		end;
+		function CProxy:OnChanged(Fn)
+			if typeof(Fn) == "function" then table.insert(self._Cbs, Fn) end;
+		end;
+		Library.Options[Idx] = CProxy;
+		return CProxy;
+	end;
+
+	local function WrapKeyProxy(Idx, Entry, KProxy, KeyObj)
+		KProxy.Save = function() return Entry.Save() end;
+		KProxy.Load = function(Data) Entry.Load(Data) end;
+		function KProxy:GetState() return KeyObj.GetState() end;
+		function KProxy:SetKey(K) KeyObj.SetKey(KeyFromString(K) or K) end;
+		function KProxy:SetValue(V)
+			if typeof(V) == "table" then self:SetKey(V[1] or V.Key) else self:SetKey(V) end;
+		end;
+		function KProxy:OnChanged(Fn)
+			if typeof(Fn) == "function" then table.insert(self._Cbs, Fn) end;
+		end;
+		Library.Options[Idx] = KProxy;
+		return KProxy;
+	end;
+
+	local function MultiToArray(D)
+		if typeof(D) ~= "table" then return D end;
+		local Arr = {};
+		for K, On in pairs(D) do
+			if typeof(K) == "number" then table.insert(Arr, D[K]);
+			elseif On then table.insert(Arr, K) end;
+		end;
+		return Arr;
+	end;
+
+	local function EnhanceSection(Sec)
+		if typeof(Sec) ~= "table" or Sec._ObsidianAPI then return Sec end;
+		Sec._ObsidianAPI = true;
+
+		Sec.AddToggle = function(self, Idx, Opts)
+			Opts = typeof(Opts) == "table" and Opts or {};
+			Idx = tostring(Idx or Opts.Text or Opts.Name or "Toggle");
+			local Proxy = { Type = "Toggle", Value = Opts.Default == true, _Cbs = {} };
+			local UserCb = typeof(Opts.Callback) == "function" and Opts.Callback or nil;
+			local Obj = self:Toggle({
+				Name     = Opts.Text or Opts.Name or Idx;
+				Default  = Opts.Default;
+				Risky    = Opts.Risky;
+				Risk     = Opts.Risk;
+				Tooltip  = Opts.Tooltip;
+				Flag     = Idx;
+				Callback = function(State)
+					Proxy.Value = State;
+					if UserCb then UserCb(State) end;
+					FireCbs(Proxy._Cbs, State);
+				end;
+			});
+			Proxy._Obj = Obj;
+			function Proxy:SetValue(V) Obj:Set(V == true) end;
+			function Proxy:OnChanged(Fn)
+				if typeof(Fn) == "function" then table.insert(self._Cbs, Fn) end;
+			end;
+			function Proxy:AddColorPicker(CIdx, COpts)
+				local CProxy, Tr, Default, Cb = NewColorProxy(COpts);
+				CIdx = tostring(CIdx or (typeof(COpts) == "table" and COpts.Text) or "Color");
+				Obj:AddColorpicker({ Flag = CIdx, Default = Default, Alpha = 1 - Tr, Callback = Cb });
+				return WrapColorProxy(CIdx, Library.Options[CIdx], CProxy);
+			end;
+			function Proxy:AddKeyPicker(KIdx, KOpts)
+				KOpts = typeof(KOpts) == "table" and KOpts or {};
+				KIdx = tostring(KIdx or KOpts.Text or "Keybind");
+				local KProxy = {
+					Type  = "KeyPicker";
+					Value = KeyToString(KeyFromString(KOpts.Default));
+					Mode  = tostring(KOpts.Mode or "Toggle");
+					_Cbs  = {};
+				};
+				Obj:AddKeybind({
+					Default = KeyFromString(KOpts.Default);
+					Mode    = KOpts.Mode;
+					Flag    = KIdx;
+					OnChanged = function(K)
+						KProxy.Value = KeyToString(K);
+						FireCbs(KProxy._Cbs, KProxy.Value);
+					end;
+				});
+				local KeyObj = Obj.KeybindObj;
+				local Entry = Library.Options[KIdx];
+				if not (KeyObj and Entry) then return KProxy end; -- 重复挂载时底层会拒绝，直接返回裸代理
+				return WrapKeyProxy(KIdx, Entry, KProxy, KeyObj);
+			end;
+			Library.Toggles[Idx] = Proxy;
+			return Proxy;
+		end;
+		Sec.AddCheckbox = Sec.AddToggle; -- Linoria 别名
+
+		Sec.AddButton = function(self, A, B)
+			local Text, Fn, Confirm;
+			if typeof(A) == "table" then
+				Text = A.Text or A.Name or "Button"; Fn = A.Func or A.Callback; Confirm = A.Confirm;
+			else
+				Text = tostring(A); Fn = B;
+			end;
+			local Obj = self:Button({
+				Text = Text; Confirm = Confirm;
+				Callback = function() if Fn then Fn() end end;
+			});
+			local BProxy = { _Obj = Obj };
+			function BProxy:AddButton(A2, B2) -- 同一行追加子按钮
+				local T2, F2;
+				if typeof(A2) == "table" then T2 = A2.Text or A2.Name or "Button"; F2 = A2.Func or A2.Callback;
+				else T2 = tostring(A2); F2 = B2; end;
+				Obj:Button({ Text = T2, Callback = function() if F2 then F2() end end });
+				return self;
+			end;
+			return BProxy;
+		end;
+
+		Sec.AddLabel = function(self, Text)
+			local Lbl = Library:CreateInstance("TextLabel", {
+				Parent = self.Body;
+				Size = UDim2.new(1, 0, 0, 14);
+				BackgroundTransparency = 1; BorderSizePixel = 0;
+				Text = tostring(Text); TextColor3 = Color3.fromHex("FFFFFF"); TextSize = 12;
+				TextXAlignment = Enum.TextXAlignment.Left; TextYAlignment = Enum.TextYAlignment.Center;
+			});
+			if ProggyCleanFont then Lbl.FontFace = ProggyCleanFont end;
+			local LProxy = { _Label = Lbl };
+			function LProxy:SetText(T) Lbl.Text = tostring(T) end;
+			function LProxy:SetColor(C) Lbl.TextColor3 = C end;
+			return LProxy;
+		end;
+
+		Sec.AddDivider = function(self)
+			local Holder = Library:CreateInstance("Frame", {
+				Parent = self.Body; Size = UDim2.new(1, 0, 0, 7);
+				BackgroundTransparency = 1; BorderSizePixel = 0;
+			});
+			Library:CreateInstance("Frame", {
+				Parent = Holder; AnchorPoint = Vector2.new(0, 0.5);
+				Position = UDim2.new(0, 0, 0.5, 0); Size = UDim2.new(1, 0, 0, 1);
+				BackgroundColor3 = Color3.fromHex("393939"); BorderSizePixel = 0;
+			});
+		end;
+
+		Sec.AddSlider = function(self, Idx, Opts)
+			Opts = typeof(Opts) == "table" and Opts or {};
+			Idx = tostring(Idx or Opts.Text or Opts.Name or "Slider");
+			local Proxy = { Type = "Slider", Value = tonumber(Opts.Default) or tonumber(Opts.Min) or 0, _Cbs = {} };
+			local UserCb = typeof(Opts.Callback) == "function" and Opts.Callback or nil;
+			local Obj = self:Slider({
+				Name     = Opts.Text or Opts.Name or Idx;
+				Min      = Opts.Min; Max = Opts.Max; Step = Opts.Step; Suffix = Opts.Suffix;
+				Decimals = Opts.Rounding or Opts.Decimals; -- Obsidian 的 Rounding 即小数位数
+				Default  = Opts.Default;
+				Tooltip  = Opts.Tooltip; Flag = Idx;
+				Callback = function(V)
+					Proxy.Value = V;
+					if UserCb then UserCb(V) end;
+					FireCbs(Proxy._Cbs, V);
+				end;
+			});
+			Proxy._Obj = Obj;
+			local Entry = Library.Options[Idx];
+			Proxy.Save = function() return Entry.Save() end;
+			Proxy.Load = function(Data) Entry.Load(Data) end;
+			function Proxy:SetValue(V) Obj:Set(V) end;
+			function Proxy:OnChanged(Fn)
+				if typeof(Fn) == "function" then table.insert(self._Cbs, Fn) end;
+			end;
+			Library.Options[Idx] = Proxy;
+			return Proxy;
+		end;
+
+		Sec.AddInput = function(self, Idx, Opts)
+			Opts = typeof(Opts) == "table" and Opts or {};
+			Idx = tostring(Idx or Opts.Text or Opts.Name or "Input");
+			local Proxy = { Type = "Input", Value = tostring(Opts.Default or ""), _Cbs = {} };
+			local UserCb = typeof(Opts.Callback) == "function" and Opts.Callback or nil;
+			local Obj = self:Textbox({
+				Name = Opts.Text or Opts.Name or Idx;
+				Default = Opts.Default; Placeholder = Opts.Placeholder; Numeric = Opts.Numeric;
+				Tooltip = Opts.Tooltip; Flag = Idx;
+				Callback = function(V)
+					Proxy.Value = V;
+					if UserCb then UserCb(V) end;
+					FireCbs(Proxy._Cbs, V);
+				end;
+			});
+			Proxy._Obj = Obj;
+			local Entry = Library.Options[Idx];
+			Proxy.Save = function() return Entry.Save() end;
+			Proxy.Load = function(Data) Entry.Load(Data) end;
+			function Proxy:SetValue(V) self.Value = tostring(V); Obj:Set(V) end;
+			function Proxy:OnChanged(Fn)
+				if typeof(Fn) == "function" then table.insert(self._Cbs, Fn) end;
+			end;
+			Library.Options[Idx] = Proxy;
+			return Proxy;
+		end;
+
+		Sec.AddDropdown = function(self, Idx, Opts)
+			Opts = typeof(Opts) == "table" and Opts or {};
+			Idx = tostring(Idx or Opts.Text or Opts.Name or "Dropdown");
+			local Values = typeof(Opts.Values) == "table" and Opts.Values
+				or (typeof(Opts.Options) == "table" and Opts.Options or {});
+			local Multi = Opts.Multi == true;
+			local Default = Opts.Default;
+			if Multi then
+				Default = MultiToArray(Default); -- Obsidian 多选默认是 { ["项"] = true } 映射
+			elseif typeof(Default) == "number" then
+				Default = Values[Default]; -- Obsidian：数字 Default 是 Values 的下标
+			end;
+			local Proxy = { Type = "Dropdown", Multi = Multi, _Cbs = {} };
+			local UserCb = typeof(Opts.Callback) == "function" and Opts.Callback or nil;
+			local Obj = self:Dropdown({
+				Name = Opts.Text or Opts.Name or Idx;
+				Options = Values; Default = Default; Multi = Multi;
+				Tooltip = Opts.Tooltip; Flag = Idx;
+				Callback = function(V)
+					Proxy.Value = V;
+					if UserCb then UserCb(V) end;
+					FireCbs(Proxy._Cbs, V);
+				end;
+			});
+			Proxy._Obj = Obj;
+			Proxy.Value = Obj:Get();
+			local Entry = Library.Options[Idx];
+			Proxy.Save = function() return Entry.Save() end;
+			Proxy.Load = function(Data) Entry.Load(Data) end;
+			function Proxy:SetValue(V)
+				if Multi then V = MultiToArray(V) end;
+				Obj:Set(V);
+			end;
+			function Proxy:SetValues(List) Obj:SetOptions(List) end;
+			function Proxy:OnChanged(Fn)
+				if typeof(Fn) == "function" then table.insert(self._Cbs, Fn) end;
+			end;
+			Library.Options[Idx] = Proxy;
+			return Proxy;
+		end;
+
+		Sec.AddKeyPicker = function(self, Idx, Opts)
+			Opts = typeof(Opts) == "table" and Opts or {};
+			Idx = tostring(Idx or Opts.Text or Opts.Name or "Keybind");
+			local UserCb = typeof(Opts.Callback) == "function" and Opts.Callback or nil;
+			local KProxy = {
+				Type  = "KeyPicker";
+				Value = KeyToString(KeyFromString(Opts.Default));
+				Mode  = tostring(Opts.Mode or "Toggle");
+				_Cbs  = {};
+			};
+			local Obj = self:Keybind({
+				Name = Opts.Text or Opts.Name or Idx;
+				Mode = Opts.Mode;
+				Default = KeyFromString(Opts.Default); -- 支持 "RightShift" / "MB2" 字符串
+				Tooltip = Opts.Tooltip; Flag = Idx;
+				Callback = function(State) if UserCb then UserCb(State) end end;
+				OnChanged = function(K)
+					KProxy.Value = KeyToString(K);
+					FireCbs(KProxy._Cbs, KProxy.Value);
+				end;
+			});
+			KProxy._Obj = Obj;
+			return WrapKeyProxy(Idx, Library.Options[Idx], KProxy, {
+				GetState = function() return Obj:Get() end;
+				SetKey   = function(K) Obj:SetKey(K) end;
+			});
+		end;
+
+		Sec.AddColorPicker = function(self, Idx, Opts)
+			Opts = typeof(Opts) == "table" and Opts or {};
+			Idx = tostring(Idx or Opts.Text or Opts.Name or "Color");
+			local CProxy, Tr, Default, Cb = NewColorProxy(Opts);
+			self:Colorpicker({
+				Name = Opts.Text or Opts.Name or Idx;
+				Default = Default; Alpha = 1 - Tr;
+				Tooltip = Opts.Tooltip; Flag = Idx;
+				Callback = Cb;
+			});
+			return WrapColorProxy(Idx, Library.Options[Idx], CProxy);
+		end;
+
+		return Sec;
+	end;
+
+	local function EnhanceTab(Tab)
+		if typeof(Tab) ~= "table" or Tab._ObsidianAPI then return Tab end;
+		Tab._ObsidianAPI = true;
+		local RawSection = Tab.Section;
+		Tab.Section = function(self, SecOpts)
+			return EnhanceSection(RawSection(self, SecOpts));
+		end;
+		Tab.AddLeftGroupbox = function(self, Name)
+			return EnhanceSection(RawSection(self, { Name = tostring(Name), Side = "Left" }));
+		end;
+		Tab.AddRightGroupbox = function(self, Name)
+			return EnhanceSection(RawSection(self, { Name = tostring(Name), Side = "Right" }));
+		end;
+		Tab.AddGroupbox = function(self, Name)
+			return EnhanceSection(RawSection(self, { Name = tostring(Name) }));
+		end;
+		return Tab;
+	end;
+
+	-- 包装 Library:Window：返回的窗口自带 AddTab，且所有 Tab（包括旧写法 Window:Tab）
+	-- 自动获得 AddLeftGroupbox / AddRightGroupbox。
+	local RawWindow = Library.Window;
+	Library.Window = function(self, Opts)
+		local Win = RawWindow(self, Opts);
+		if typeof(Win) == "table" and not Win._ObsidianAPI then
+			Win._ObsidianAPI = true;
+			local RawTab = Win.Tab;
+			Win.Tab = function(wself, TOpts)
+				return EnhanceTab(RawTab(wself, TOpts));
+			end;
+			Win.AddTab = function(wself, Name)
+				return EnhanceTab(RawTab(wself, { Name = tostring(Name) }));
+			end;
+		end;
+		return Win;
+	end;
+
+	-- Obsidian 风格窗口创建别名：Title / Size(UDim2 或 Vector2)
+	Library.CreateWindow = function(self, Opts)
+		Opts = typeof(Opts) == "table" and Opts or {};
+		local Width, Height = Opts.Width, Opts.Height;
+		local Sz = Opts.Size;
+		if typeof(Sz) == "UDim2" then
+			Width  = Width or Sz.X.Offset;
+			Height = Height or Sz.Y.Offset;
+		elseif typeof(Sz) == "Vector2" then
+			Width  = Width or Sz.X;
+			Height = Height or Sz.Y;
+		end;
+		return self:Window({
+			Name = Opts.Title or Opts.Name;
+			Width = Width; Height = Height;
+			MinWidth = Opts.MinWidth; MinHeight = Opts.MinHeight;
+			Logo = Opts.Logo; Icon = Opts.Icon; -- [MOBILE PATCH] 自定义图标透传
+		});
+	end;
+end;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- [MOBILE PATCH] 自定义图标（窗口标题 Logo / 水印 Logo 外部可换）
+--   Library:SetLogo("rbxassetid://123")   -- 全部已建/将建的 Logo 一起换
+--   Library:SetLogo("https://.../x.png")  -- 图片直链：自动下载缓存到 Hydrogen/
+--   Library:SetLogo("folder/x.png")       -- 本地文件路径
+--   Library:SetLogo(false)                -- 全部隐藏
+--   单个窗口/水印也可在创建时传 Logo = ...（或 Icon = ...），false = 不显示
+-- ════════════════════════════════════════════════════════════════════════════
+do
+	Library._LogoInstances = Library._LogoInstances or {};
+	Library._CustomLogo    = Library._CustomLogo or nil;
+	local DefaultLogoAsset = nil; -- 惰性解析一次
+
+	function Library:_ResolveLogo(Source)
+		if Source == nil then Source = self._CustomLogo end;
+		if Source == nil or Source == false then
+			if Source == false then return nil end;
+			if DefaultLogoAsset == nil then
+				local Ok, A = pcall(getcustomasset, "Hydrogen/logo2.png");
+				DefaultLogoAsset = (Ok and A) or false;
+			end;
+			return DefaultLogoAsset or nil;
+		end;
+		if typeof(Source) ~= "string" then return nil end;
+		if string.match(Source, "^rbxassetid://") or string.match(Source, "^rbxthumb://") or string.match(Source, "^rbxgameasset://") then
+			return Source;
+		end;
+		if string.match(Source, "^https?://") then
+			self._LogoUrlCache = self._LogoUrlCache or {};
+			local Path = self._LogoUrlCache[Source];
+			if not Path then
+				self._LogoUrlN = (self._LogoUrlN or 0) + 1;
+				Path = "Hydrogen/customlogo" .. tostring(self._LogoUrlN) .. ".png";
+				self._LogoUrlCache[Source] = Path;
+			end;
+			if not (isfile and isfile(Path)) then
+				local Ok, Data = pcall(function() return game:HttpGet(Source) end);
+				if not Ok or typeof(Data) ~= "string" or #Data == 0 then return nil end;
+				pcall(writefile, Path, Data);
+			end;
+			local OkA, A = pcall(getcustomasset, Path);
+			return (OkA and A) or nil;
+		end;
+		if isfile and isfile(Source) then
+			local OkA, A = pcall(getcustomasset, Source);
+			return (OkA and A) or nil;
+		end;
+		return nil;
+	end;
+
+	function Library:SetLogo(Source)
+		self._CustomLogo = Source;
+		local Asset = (Source ~= false) and self:_ResolveLogo(Source) or nil;
+		local Alive = {};
+		for _, Inst in ipairs(self._LogoInstances) do
+			if Inst and Inst.Parent then
+				if Source == false then
+					Inst.Visible = false;
+				elseif Asset then
+					Inst.Image = Asset; Inst.Visible = true;
+				end;
+				table.insert(Alive, Inst);
+			end;
+		end;
+		self._LogoInstances = Alive;
+	end;
+end;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- [MOBILE PATCH] 外部可调用的加载动画（Obsidian CreateLoading 风格，高级动效版）
+--   local Loading = Library:CreateLoading({ Title = "mspaint", Icon = 95816097006870, TotalSteps = 4 })
+--   Loading:SetMessage("...") / Loading:SetDescription("...") / Loading:SetCurrentStep(1)
+--   Loading:ShowSidebarPage(true); Loading.Sidebar:AddLabel("User: ...")
+--   Loading:Continue()  -- 淡出并销毁（触发 Opts.Callback）
+-- 动效：旋转追光环 + 图标呼吸光晕 / 进度条指数平滑 + 百分比 + 流光扫过 /
+--       文案交叉淡入淡出 / 缩放+上浮入场 / 底部主题色内辉光 / 背景柔光压暗
+-- ════════════════════════════════════════════════════════════════════════════
+function Library:CreateLoading(Opts)
+	Opts = typeof(Opts) == "table" and Opts or {};
+	local TitleText  = tostring(Opts.Title or Opts.Name or "Loading");
+	local TotalSteps = math.max(1, math.floor(tonumber(Opts.TotalSteps) or 1));
+	local IconSrc = Opts.Icon;
+	if IconSrc == nil then IconSrc = Opts.Logo end;
+	if typeof(IconSrc) == "number" then IconSrc = "rbxassetid://" .. tostring(IconSrc) end;
+
+	local Gui = Library:CreateInstance("ScreenGui", {
+		Name           = "CoincideLoading";
+		Parent         = (gethui and gethui()) or CoreGui;
+		IgnoreGuiInset = true;
+		ResetOnSpawn   = false;
+		DisplayOrder   = 9999;
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
+	});
+
+	-- 背景柔光压暗
+	local Dim = Library:CreateInstance("Frame", {
+		Parent = Gui; Size = UDim2.new(1, 0, 1, 0);
+		BackgroundColor3 = Color3.fromHex("000000"); BackgroundTransparency = 1;
+		BorderSizePixel = 0;
+	});
+
+	local BaseW, SideW, H = 320, 132, 178;
+	local Root = Library:CreateInstance("CanvasGroup", {
+		Name              = "Root";
+		Parent            = Gui;
+		AnchorPoint       = Vector2.new(0.5, 0.5);
+		Position          = UDim2.new(0.5, 0, 0.5, 16);
+		Size              = UDim2.fromOffset(BaseW, H);
+		BackgroundColor3  = Color3.fromHex("FFFFFF");
+		BorderSizePixel   = 0;
+		GroupTransparency = 1;
+	});
+	Library:CreateInstance("UICorner", { Parent = Root; CornerRadius = UDim.new(0, 10) });
+	Library:CreateInstance("UIGradient", {
+		Parent = Root; Rotation = 90;
+		Color = NewColorSequence({
+			NewColorSequenceKeypoint(0, Color3.fromHex("1C1C22"));
+			NewColorSequenceKeypoint(1, Color3.fromHex("111114"));
+		});
+	});
+	Library:CreateInstance("UIStroke", {
+		Parent = Root; Color = Color3.fromHex("2E2E36"); Thickness = 1; Transparency = 0.15;
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+	});
+	-- 底部主题色内辉光
+	local BottomGlow = Library:CreateInstance("Frame", {
+		Parent = Root; AnchorPoint = Vector2.new(0.5, 1); ZIndex = 1;
+		Position = UDim2.new(0.5, 0, 1, 0); Size = UDim2.new(1, 0, 0, 26);
+		BackgroundColor3 = Color3.fromHex("FFFFFF"); BorderSizePixel = 0;
+	});
+	local BgGlowGrad = Library:CreateInstance("UIGradient", {
+		Parent = BottomGlow; Rotation = 90;
+		Transparency = NewNumberSequence({
+			NewNumberSequenceKeypoint(0, 1);
+			NewNumberSequenceKeypoint(1, 0.85);
+		});
+	});
+	Library:RegisterAccentGradient(BgGlowGrad);
+	-- 顶部高光线：中间主题色、两端淡出
+	local TopLine = Library:CreateInstance("Frame", {
+		Parent = Root; Position = UDim2.new(0, 12, 0, 0); Size = UDim2.new(1, -24, 0, 1);
+		BackgroundColor3 = Color3.fromHex("FFFFFF"); BorderSizePixel = 0; ZIndex = 10;
+	});
+	local TopGrad = Library:CreateInstance("UIGradient", {
+		Parent = TopLine; Rotation = 0;
+		Transparency = NewNumberSequence({
+			NewNumberSequenceKeypoint(0,   1);
+			NewNumberSequenceKeypoint(0.3, 0.15);
+			NewNumberSequenceKeypoint(0.7, 0.15);
+			NewNumberSequenceKeypoint(1,   1);
+		});
+	});
+	Library:RegisterAccentGradient(TopGrad);
+
+	local PopScale = Library:CreateInstance("UIScale", { Parent = Root; Scale = 0.94 });
+
+	-- 主区固定宽度锚左：侧栏展开时 Root 向右加宽，主区内容不动
+	local Main = Library:CreateInstance("Frame", {
+		Parent = Root; Size = UDim2.new(0, BaseW, 1, 0); ZIndex = 2;
+		BackgroundTransparency = 1; BorderSizePixel = 0;
+	});
+
+	-- 旋转追光环（底环 + 渐变弧段旋转）
+	local RingBase = Library:CreateInstance("Frame", {
+		Parent = Main; AnchorPoint = Vector2.new(0.5, 0);
+		Position = UDim2.new(0.5, 0, 0, 18); Size = UDim2.fromOffset(52, 52);
+		BackgroundTransparency = 1; BorderSizePixel = 0;
+	});
+	Library:CreateInstance("UICorner", { Parent = RingBase; CornerRadius = UDim.new(1, 0) });
+	Library:CreateInstance("UIStroke", {
+		Parent = RingBase; Color = Color3.fromHex("3A3A44"); Thickness = 2; Transparency = 0.45;
+	});
+	local Ring = Library:CreateInstance("Frame", {
+		Parent = Main; AnchorPoint = Vector2.new(0.5, 0);
+		Position = UDim2.new(0.5, 0, 0, 18); Size = UDim2.fromOffset(52, 52);
+		BackgroundTransparency = 1; BorderSizePixel = 0;
+	});
+	Library:CreateInstance("UICorner", { Parent = Ring; CornerRadius = UDim.new(1, 0) });
+	local RingStroke = Library:CreateInstance("UIStroke", {
+		Parent = Ring; Color = Library.Accent; Thickness = 2;
+	});
+	Library:RegisterAccent(RingStroke, "Color");
+	local RingGrad = Library:CreateInstance("UIGradient", {
+		Parent = RingStroke;
+		Transparency = NewNumberSequence({
+			NewNumberSequenceKeypoint(0,    0);
+			NewNumberSequenceKeypoint(0.30, 0.05);
+			NewNumberSequenceKeypoint(0.75, 1);
+			NewNumberSequenceKeypoint(1,    1);
+		});
+	});
+
+	-- 图标 + 呼吸光晕
+	local Halo = Library:CreateInstance("ImageLabel", {
+		Parent = Ring; AnchorPoint = Vector2.new(0.5, 0.5); ZIndex = 1;
+		Position = UDim2.new(0.5, 0, 0.5, 0); Size = UDim2.fromOffset(34, 34);
+		BackgroundTransparency = 1; BorderSizePixel = 0; ScaleType = Enum.ScaleType.Fit;
+		ImageColor3 = Library.Accent; ImageTransparency = 0.85;
+	});
+	Library:RegisterAccent(Halo, "ImageColor3");
+	local HaloScale = Library:CreateInstance("UIScale", { Parent = Halo; Scale = 1 });
+	local IconImg = Library:CreateInstance("ImageLabel", {
+		Parent = Ring; AnchorPoint = Vector2.new(0.5, 0.5); ZIndex = 2;
+		Position = UDim2.new(0.5, 0, 0.5, 0); Size = UDim2.fromOffset(26, 26);
+		BackgroundTransparency = 1; BorderSizePixel = 0; ScaleType = Enum.ScaleType.Fit;
+	});
+	local IconAsset = (IconSrc ~= false) and Library:_ResolveLogo(IconSrc) or nil;
+	if IconAsset then
+		IconImg.Image = IconAsset; Halo.Image = IconAsset;
+	else
+		IconImg.Visible = false; Halo.Visible = false;
+	end;
+
+	local TitleLbl = Library:CreateInstance("TextLabel", {
+		Parent = Main; Position = UDim2.new(0, 0, 0, 78); Size = UDim2.new(1, 0, 0, 15);
+		BackgroundTransparency = 1; Text = TitleText; TextColor3 = Color3.fromHex("FFFFFF");
+		TextSize = 14; TextXAlignment = Enum.TextXAlignment.Center;
+	});
+	local MsgLbl = Library:CreateInstance("TextLabel", {
+		Parent = Main; Position = UDim2.new(0, 0, 0, 97); Size = UDim2.new(1, 0, 0, 13);
+		BackgroundTransparency = 1; Text = tostring(Opts.Message or ""); TextColor3 = Library.Accent;
+		TextSize = 12; TextXAlignment = Enum.TextXAlignment.Center;
+	});
+	Library:RegisterAccent(MsgLbl, "TextColor3");
+	local DescLbl = Library:CreateInstance("TextLabel", {
+		Parent = Main; Position = UDim2.new(0, 0, 0, 114); Size = UDim2.new(1, 0, 0, 13);
+		BackgroundTransparency = 1; Text = tostring(Opts.Description or ""); TextColor3 = Color3.fromHex("8C8F99");
+		TextSize = 12; TextXAlignment = Enum.TextXAlignment.Center;
+	});
+	local StepLbl = Library:CreateInstance("TextLabel", {
+		Parent = Main; Position = UDim2.new(0, 28, 1, -46); Size = UDim2.new(0.5, -28, 0, 11);
+		BackgroundTransparency = 1; Text = "0 / " .. tostring(TotalSteps); TextColor3 = Color3.fromHex("6E7280");
+		TextSize = 11; TextXAlignment = Enum.TextXAlignment.Left;
+	});
+	local PctLbl = Library:CreateInstance("TextLabel", {
+		Parent = Main; Position = UDim2.new(0.5, 0, 1, -46); Size = UDim2.new(0.5, -28, 0, 11);
+		BackgroundTransparency = 1; Text = "0%"; TextColor3 = Color3.fromHex("8C8F99");
+		TextSize = 11; TextXAlignment = Enum.TextXAlignment.Right;
+	});
+	if ProggyCleanFont then
+		TitleLbl.FontFace = ProggyCleanFont; MsgLbl.FontFace  = ProggyCleanFont;
+		DescLbl.FontFace  = ProggyCleanFont; StepLbl.FontFace = ProggyCleanFont;
+		PctLbl.FontFace   = ProggyCleanFont;
+	end;
+
+	-- 进度条：圆角轨道 + 渐变填充 + 流光
+	local Track = Library:CreateInstance("Frame", {
+		Parent = Main; AnchorPoint = Vector2.new(0.5, 1);
+		Position = UDim2.new(0.5, 0, 1, -20); Size = UDim2.new(1, -56, 0, 10);
+		BackgroundColor3 = Color3.fromHex("0B0B0E"); BorderSizePixel = 0; ClipsDescendants = true;
+	});
+	Library:CreateInstance("UICorner", { Parent = Track; CornerRadius = UDim.new(1, 0) });
+	Library:CreateInstance("UIStroke", {
+		Parent = Track; Color = Color3.fromHex("2E2E36"); Thickness = 1; Transparency = 0.35;
+	});
+	local Fill = Library:CreateInstance("Frame", {
+		Parent = Track; Position = UDim2.new(0, 0, 0, 0); Size = UDim2.new(0, 0, 1, 0);
+		BackgroundColor3 = Color3.fromHex("FFFFFF"); BorderSizePixel = 0; ClipsDescendants = true;
+	});
+	Library:CreateInstance("UICorner", { Parent = Fill; CornerRadius = UDim.new(1, 0) });
+	Library:RegisterAccentGradient(Library:CreateInstance("UIGradient", { Parent = Fill; Rotation = 0 }));
+	local Sheen = Library:CreateInstance("Frame", {
+		Parent = Fill; Size = UDim2.new(0, 46, 1, 0); Position = UDim2.new(-0.2, -20, 0, 0);
+		BackgroundColor3 = Color3.fromHex("FFFFFF"); BorderSizePixel = 0;
+	});
+	Library:CreateInstance("UIGradient", {
+		Parent = Sheen; Rotation = 0;
+		Transparency = NewNumberSequence({
+			NewNumberSequenceKeypoint(0,   1);
+			NewNumberSequenceKeypoint(0.5, 0.55);
+			NewNumberSequenceKeypoint(1,   1);
+		});
+	});
+
+	-- 侧栏（CanvasGroup 方便整体淡入）
+	local SidebarFrame = Library:CreateInstance("CanvasGroup", {
+		Parent = Root; AnchorPoint = Vector2.new(1, 0); ZIndex = 3;
+		Position = UDim2.new(1, 0, 0, 0); Size = UDim2.new(0, SideW, 1, 0);
+		BackgroundColor3 = Color3.fromHex("141419"); BorderSizePixel = 0;
+		Visible = false; GroupTransparency = 1;
+	});
+	Library:CreateInstance("Frame", { -- 左侧分隔线
+		Parent = SidebarFrame; Size = UDim2.new(0, 1, 1, 0);
+		BackgroundColor3 = Color3.fromHex("2E2E36"); BorderSizePixel = 0;
+	});
+	local SideBody = Library:CreateInstance("Frame", {
+		Parent = SidebarFrame; Position = UDim2.new(0, 12, 0, 12); Size = UDim2.new(1, -22, 1, -24);
+		BackgroundTransparency = 1; BorderSizePixel = 0;
+	});
+	Library:CreateInstance("UIListLayout", {
+		Parent = SideBody; FillDirection = Enum.FillDirection.Vertical;
+		SortOrder = Enum.SortOrder.LayoutOrder; Padding = UDim.new(0, 6);
+	});
+
+	local Loading = { Gui = Gui, Root = Root };
+	local CurrentStep    = 0;
+	local SidebarShown   = false;
+	local Destroyed      = false;
+	local TargetProgress = 0;
+	local ShownProgress  = 0;
+	local SpinAngle      = 0;
+	local HaloClock      = 0;
+	local SheenClock     = 0;
+
+	-- 单 RenderStepped 驱动：追光环旋转 / 光晕呼吸 / 进度指数平滑 / 流光
+	local Conn = RunService.RenderStepped:Connect(function(DT)
+		SpinAngle = (SpinAngle + DT * 140) % 360;
+		RingGrad.Rotation = SpinAngle;
+		HaloClock = HaloClock + DT;
+		HaloScale.Scale = 1.08 + 0.08 * math.sin(HaloClock * 2.4);
+		Halo.ImageTransparency = 0.82 + 0.1 * math.sin(HaloClock * 2.4 + 1.2);
+		local A = 1 - math.exp(-DT * 7);
+		if math.abs(TargetProgress - ShownProgress) > 0.0005 then
+			ShownProgress = ShownProgress + (TargetProgress - ShownProgress) * A;
+		else
+			ShownProgress = TargetProgress;
+		end;
+		Fill.Size = UDim2.new(ShownProgress, 0, 1, 0);
+		PctLbl.Text = tostring(math.floor(ShownProgress * 100 + 0.5)) .. "%";
+		SheenClock = (SheenClock + DT * 0.55) % 1;
+		Sheen.Position = UDim2.new(SheenClock * 1.4 - 0.2, -20, 0, 0);
+	end);
+
+	-- 文案交叉淡入淡出
+	local function SwapText(Lbl, NewText)
+		NewText = tostring(NewText);
+		if Lbl.Text == NewText then return end;
+		local Out = Library:Tween(Lbl, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { TextTransparency = 1 });
+		Out:Play();
+		Out.Completed:Once(function()
+			if Destroyed then return end;
+			Lbl.Text = NewText;
+			Library:Tween(Lbl, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { TextTransparency = 0 }):Play();
+		end);
+	end;
+
+	function Loading:SetMessage(T) SwapText(MsgLbl, T) end;
+	function Loading:SetDescription(T) SwapText(DescLbl, T) end;
+	function Loading:SetCurrentStep(N)
+		CurrentStep = math.clamp(math.floor(tonumber(N) or 0), 0, TotalSteps);
+		StepLbl.Text = tostring(CurrentStep) .. " / " .. tostring(TotalSteps);
+		TargetProgress = CurrentStep / TotalSteps;
+	end;
+	function Loading:SetProgress(P) -- 0-1 直接设进度，不动步数文字
+		TargetProgress = math.clamp(tonumber(P) or 0, 0, 1);
+	end;
+	function Loading:ShowSidebarPage(B)
+		B = B == true;
+		if B == SidebarShown then return end;
+		SidebarShown = B;
+		if B then
+			SidebarFrame.Visible = true;
+			Library:Tween(Root, TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+				Size = UDim2.fromOffset(BaseW + SideW, H);
+			}):Play();
+			Library:Tween(SidebarFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				GroupTransparency = 0;
+			}):Play();
+		else
+			Library:Tween(Root, TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+				Size = UDim2.fromOffset(BaseW, H);
+			}):Play();
+			Library:Tween(SidebarFrame, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+				GroupTransparency = 1;
+			}):Play();
+			task.delay(0.25, function() if not SidebarShown then SidebarFrame.Visible = false end end);
+		end;
+	end;
+	Loading.Sidebar = {
+		AddLabel = function(_, T)
+			local Row = Library:CreateInstance("Frame", {
+				Parent = SideBody; Size = UDim2.new(1, 0, 0, 14);
+				BackgroundTransparency = 1; BorderSizePixel = 0;
+			});
+			local Dot = Library:CreateInstance("Frame", {
+				Parent = Row; AnchorPoint = Vector2.new(0, 0.5);
+				Position = UDim2.new(0, 1, 0.5, 0); Size = UDim2.fromOffset(4, 4);
+				BackgroundColor3 = Library.Accent; BorderSizePixel = 0;
+			});
+			Library:CreateInstance("UICorner", { Parent = Dot; CornerRadius = UDim.new(1, 0) });
+			Library:RegisterAccent(Dot);
+			local L = Library:CreateInstance("TextLabel", {
+				Parent = Row; Position = UDim2.new(0, 11, 0, 0); Size = UDim2.new(1, -11, 1, 0);
+				BackgroundTransparency = 1; Text = tostring(T); TextColor3 = Color3.fromHex("B8BEC8");
+				TextSize = 12; TextXAlignment = Enum.TextXAlignment.Left;
+				TextTruncate = Enum.TextTruncate.AtEnd;
+			});
+			if ProggyCleanFont then L.FontFace = ProggyCleanFont end;
+			return { SetText = function(_, T2) L.Text = tostring(T2) end };
+		end;
+	};
+	function Loading:Destroy()
+		if Destroyed then return end;
+		Destroyed = true;
+		Conn:Disconnect();
+		Gui:Destroy();
+	end;
+	function Loading:Continue()
+		if Destroyed then return end;
+		Destroyed = true;
+		Conn:Disconnect();
+		if typeof(Opts.Callback) == "function" then task.spawn(Opts.Callback) end;
+		Library:Tween(Dim, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { BackgroundTransparency = 1 }):Play();
+		Library:Tween(Root, TweenInfo.new(0.32, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+			GroupTransparency = 1; Position = UDim2.new(0.5, 0, 0.5, 10);
+		}):Play();
+		Library:Tween(PopScale, TweenInfo.new(0.32, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Scale = 0.96 }):Play();
+		task.delay(0.36, function() if Gui.Parent then Gui:Destroy() end end);
+	end;
+
+	-- 入场：压暗背景 + 淡入上浮 + 轻微回弹放大
+	Library:Tween(Dim, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 0.42 }):Play();
+	Library:Tween(Root, TweenInfo.new(0.5, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+		GroupTransparency = 0; Position = UDim2.new(0.5, 0, 0.5, 0);
+	}):Play();
+	Library:Tween(PopScale, TweenInfo.new(0.55, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Scale = 1 }):Play();
+
+	return Loading;
 end;
 
 Library:Log("Initialized Hydrogen UI Lib")
