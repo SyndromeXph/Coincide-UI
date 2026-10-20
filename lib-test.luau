@@ -65,10 +65,17 @@ local function int()
 			return game:HttpGet(logourl);
 		end);
 
-		if success and data then
+		-- [MOBILE PATCH] validate PNG magic: a dead link downloads an HTML error page,
+		-- and caching that garbage as "logo2.png" breaks every logo in the UI forever
+		if success and data and #data > 100 and string.sub(data, 1, 4) == "\137PNG" then
 			writefile("Hydrogen/logo2.png", data);
 			print("downloaded logo");
 		end;
+	elseif not pcall(function()
+		local d = readfile("Hydrogen/logo2.png");
+		if #d < 100 or string.sub(d, 1, 4) ~= "\137PNG" then error("bad cache") end;
+	end) then
+		pcall(delfile, "Hydrogen/logo2.png"); -- [MOBILE PATCH] purge corrupted cached logo
 	end;
 end;
 
@@ -267,7 +274,7 @@ function CreateLoader(Title, WindowSize)
 	Dim.BorderSizePixel = 0;
 	Dim.Parent = Gui;
 
-	local PW, PH = 320, 186;
+	local PW, PH = 320, 196;
 	local Root = Instance.new("CanvasGroup");
 	Root.AnchorPoint = Vector2.new(0.5, 0.5);
 	Root.Position = UDim2.new(0.5, 0, 0.5, 14);
@@ -278,12 +285,19 @@ function CreateLoader(Title, WindowSize)
 	Root.Parent = Gui;
 	local RootCorner = Instance.new("UICorner"); RootCorner.CornerRadius = UDim.new(0, 10); RootCorner.Parent = Root;
 	local BgGrad = Instance.new("UIGradient"); BgGrad.Rotation = 90; BgGrad.Color = NewColorSequence({
-		NewColorSequenceKeypoint(0, Color3.fromHex("1C1C22"));
-		NewColorSequenceKeypoint(1, Color3.fromHex("111114"));
+		NewColorSequenceKeypoint(0, Color3.fromHex("1E1E1E")); -- exact window palette
+		NewColorSequenceKeypoint(1, Color3.fromHex("161616"));
 	}); BgGrad.Parent = Root;
-	local RootStroke = Instance.new("UIStroke"); RootStroke.Color = Color3.fromHex("2E2E36");
-	RootStroke.Thickness = 1; RootStroke.Transparency = 0.15;
+	local RootStroke = Instance.new("UIStroke"); RootStroke.Color = Color3.fromHex("000105"); -- window outer outline
+	RootStroke.Thickness = 1; RootStroke.Transparency = 0;
 	RootStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border; RootStroke.Parent = Root;
+	local InnerLine = Instance.new("Frame"); -- window-style inner gray stroke, clearly visible
+	InnerLine.Position = UDim2.new(0, 1, 0, 1); InnerLine.Size = UDim2.new(1, -2, 1, -2);
+	InnerLine.BackgroundTransparency = 1; InnerLine.BorderSizePixel = 0; InnerLine.ZIndex = 9; InnerLine.Parent = Root;
+	local InnerCorner = Instance.new("UICorner"); InnerCorner.CornerRadius = UDim.new(0, 9); InnerCorner.Parent = InnerLine;
+	local InnerStroke = Instance.new("UIStroke"); InnerStroke.Color = Color3.fromHex("393939");
+	InnerStroke.Thickness = 1; InnerStroke.Transparency = 0;
+	InnerStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border; InnerStroke.Parent = InnerLine;
 
 	-- top highlight line, fading at both ends
 	local TopLine = Instance.new("Frame");
@@ -298,8 +312,8 @@ function CreateLoader(Title, WindowSize)
 	});
 	TopGrad.Transparency = NewNumberSequence({
 		NewNumberSequenceKeypoint(0,   1);
-		NewNumberSequenceKeypoint(0.3, 0.15);
-		NewNumberSequenceKeypoint(0.7, 0.15);
+		NewNumberSequenceKeypoint(0.3, 0.05);
+		NewNumberSequenceKeypoint(0.7, 0.05);
 		NewNumberSequenceKeypoint(1,   1);
 	});
 	TopGrad.Parent = TopLine;
@@ -312,27 +326,27 @@ function CreateLoader(Title, WindowSize)
 	local GlowGrad = Instance.new("UIGradient"); GlowGrad.Rotation = 90;
 	GlowGrad.Transparency = NewNumberSequence({
 		NewNumberSequenceKeypoint(0, 1);
-		NewNumberSequenceKeypoint(1, 0.78);
+		NewNumberSequenceKeypoint(1, 0.72);
 	});
 	GlowGrad.Parent = Glow;
 
 	local PopScale = Instance.new("UIScale"); PopScale.Scale = 0.94; PopScale.Parent = Root;
 
-	-- chase ring + breathing halo + logo
-	local RingCY = 46;
+	-- chase ring + breathing aura + logo tile
+	local RingCY = 50;
 	local RingBase = Instance.new("Frame");
 	RingBase.AnchorPoint = Vector2.new(0.5, 0.5);
 	RingBase.Position = UDim2.new(0.5, 0, 0, RingCY);
-	RingBase.Size = UDim2.fromOffset(54, 54);
+	RingBase.Size = UDim2.fromOffset(62, 62);
 	RingBase.BackgroundTransparency = 1; RingBase.BorderSizePixel = 0; RingBase.ZIndex = 3; RingBase.Parent = Root;
 	local RingBaseCorner = Instance.new("UICorner"); RingBaseCorner.CornerRadius = UDim.new(1, 0); RingBaseCorner.Parent = RingBase;
-	local RingBaseStroke = Instance.new("UIStroke"); RingBaseStroke.Color = Color3.fromHex("3A3A44");
-	RingBaseStroke.Thickness = 2; RingBaseStroke.Transparency = 0.45; RingBaseStroke.Parent = RingBase;
+	local RingBaseStroke = Instance.new("UIStroke"); RingBaseStroke.Color = Color3.fromHex("393939");
+	RingBaseStroke.Thickness = 2; RingBaseStroke.Transparency = 0.2; RingBaseStroke.Parent = RingBase;
 
 	local Ring = Instance.new("Frame");
 	Ring.AnchorPoint = Vector2.new(0.5, 0.5);
 	Ring.Position = UDim2.new(0.5, 0, 0, RingCY);
-	Ring.Size = UDim2.fromOffset(54, 54);
+	Ring.Size = UDim2.fromOffset(62, 62);
 	Ring.BackgroundTransparency = 1; Ring.BorderSizePixel = 0; Ring.ZIndex = 4; Ring.Parent = Root;
 	local RingCorner = Instance.new("UICorner"); RingCorner.CornerRadius = UDim.new(1, 0); RingCorner.Parent = Ring;
 	local RingStroke = Instance.new("UIStroke"); RingStroke.Color = Accent; RingStroke.Thickness = 3; RingStroke.Parent = Ring;
@@ -349,8 +363,8 @@ function CreateLoader(Title, WindowSize)
 	local Aura = Instance.new("Frame");
 	Aura.AnchorPoint = Vector2.new(0.5, 0.5);
 	Aura.Position = UDim2.new(0.5, 0, 0, RingCY);
-	Aura.Size = UDim2.fromOffset(160, 116);
-	Aura.BackgroundColor3 = Accent; Aura.BackgroundTransparency = 0.7;
+	Aura.Size = UDim2.fromOffset(180, 126);
+	Aura.BackgroundColor3 = Accent; Aura.BackgroundTransparency = 0.6;
 	Aura.BorderSizePixel = 0; Aura.ZIndex = 2; Aura.Parent = Root;
 	local AuraV = Instance.new("UIGradient");
 	AuraV.Rotation = 90;
@@ -377,7 +391,7 @@ function CreateLoader(Title, WindowSize)
 	local Tile = Instance.new("Frame");
 	Tile.AnchorPoint = Vector2.new(0.5, 0.5);
 	Tile.Position = UDim2.new(0.5, 0, 0, RingCY);
-	Tile.Size = UDim2.fromOffset(34, 34);
+	Tile.Size = UDim2.fromOffset(40, 40);
 	Tile.BackgroundColor3 = Accent; Tile.BorderSizePixel = 0; Tile.ZIndex = 5; Tile.Parent = Root;
 	local TileCorner = Instance.new("UICorner"); TileCorner.CornerRadius = UDim.new(0, 9); TileCorner.Parent = Tile;
 	local TileGrad = Instance.new("UIGradient"); TileGrad.Rotation = 90;
@@ -392,7 +406,7 @@ function CreateLoader(Title, WindowSize)
 	local Icon = Instance.new("ImageLabel");
 	Icon.AnchorPoint = Vector2.new(0.5, 0.5);
 	Icon.Position = UDim2.new(0.5, 0, 0.5, 0);
-	Icon.Size = UDim2.fromOffset(22, 22);
+	Icon.Size = UDim2.fromOffset(26, 26);
 	Icon.BackgroundTransparency = 1; Icon.BorderSizePixel = 0; Icon.ScaleType = Enum.ScaleType.Fit;
 	Icon.ZIndex = 6; Icon.Parent = Tile;
 
@@ -402,19 +416,29 @@ function CreateLoader(Title, WindowSize)
 	Mono.Size = UDim2.new(1, 0, 1, 0);
 	Mono.BackgroundTransparency = 1;
 	Mono.Text = string.upper(string.sub(tostring(Title or "C"), 1, 1));
-	Mono.TextColor3 = Color3.fromHex("FFFFFF"); Mono.TextSize = 16; Mono.Font = Enum.Font.GothamBold;
+	Mono.TextColor3 = Color3.fromHex("FFFFFF"); Mono.TextSize = 19; Mono.Font = Enum.Font.GothamBold;
 	Mono.ZIndex = 6; Mono.Visible = false; Mono.Parent = Tile;
 
-	-- logo: local file -> re-download -> monogram fallback (icon is never empty)
+	-- logo: local file -> re-download -> monogram fallback (icon is never empty).
+	-- PNG magic check: a dead link yields an HTML error page; caching that as
+	-- "logo2.png" used to silently break every logo in the UI.
 	local LogoAsset = (function()
+		local function IsPng(D)
+			return type(D) == "string" and #D > 100 and string.sub(D, 1, 4) == "\137PNG";
+		end;
 		if isfile("Hydrogen/logo2.png") then
-			local Ok, A = pcall(getcustomasset, "Hydrogen/logo2.png");
-			if Ok and A then return A; end;
+			local OkR, Data = pcall(readfile, "Hydrogen/logo2.png");
+			if OkR and IsPng(Data) then
+				local Ok, A = pcall(getcustomasset, "Hydrogen/logo2.png");
+				if Ok and A then return A; end;
+			else
+				pcall(delfile, "Hydrogen/logo2.png"); -- corrupted cache (HTML error page etc.)
+			end;
 		end;
 		local OkD, Data = pcall(function()
 			return game:HttpGet("https://www.dropbox.com/scl/fi/r3qlj26fdg2bniukw6ut9/logo2.png?rlkey=5kq8p4mpdm4e5laqd7havyfsn&st=od93q1vk&dl=1");
 		end);
-		if OkD and Data and #Data > 100 then
+		if OkD and IsPng(Data) then
 			pcall(function()
 				if not isfolder("Hydrogen") then makefolder("Hydrogen") end;
 				writefile("Hydrogen/logo2.png", Data);
@@ -432,20 +456,20 @@ function CreateLoader(Title, WindowSize)
 
 	-- texts
 	local TitleLbl = Instance.new("TextLabel");
-	TitleLbl.Position = UDim2.new(0, 0, 0, 80); TitleLbl.Size = UDim2.new(1, 0, 0, 15);
+	TitleLbl.Position = UDim2.new(0, 0, 0, 88); TitleLbl.Size = UDim2.new(1, 0, 0, 16);
 	TitleLbl.BackgroundTransparency = 1; TitleLbl.Text = tostring(Title or "Loading");
-	TitleLbl.TextColor3 = Color3.fromHex("FFFFFF"); TitleLbl.TextSize = 14;
-	TitleLbl.Font = Enum.Font.GothamMedium; TitleLbl.ZIndex = 3; TitleLbl.Parent = Root;
+	TitleLbl.TextColor3 = Color3.fromHex("FFFFFF"); TitleLbl.TextSize = 15;
+	TitleLbl.Font = Enum.Font.GothamBold; TitleLbl.ZIndex = 3; TitleLbl.Parent = Root;
 
 	local MsgLbl = Instance.new("TextLabel");
-	MsgLbl.Position = UDim2.new(0, 0, 0, 99); MsgLbl.Size = UDim2.new(1, 0, 0, 13);
+	MsgLbl.Position = UDim2.new(0, 0, 0, 108); MsgLbl.Size = UDim2.new(1, 0, 0, 14);
 	MsgLbl.BackgroundTransparency = 1; MsgLbl.Text = "";
-	MsgLbl.TextColor3 = Accent; MsgLbl.TextSize = 12;
+	MsgLbl.TextColor3 = Accent; MsgLbl.TextSize = 13;
 	MsgLbl.Font = Enum.Font.Gotham; MsgLbl.ZIndex = 3; MsgLbl.Parent = Root;
 
 	local PctLbl = Instance.new("TextLabel");
 	PctLbl.AnchorPoint = Vector2.new(1, 0);
-	PctLbl.Position = UDim2.new(1, -36, 0, PH - 52); PctLbl.Size = UDim2.new(0, 60, 0, 11);
+	PctLbl.Position = UDim2.new(1, -30, 0, PH - 50); PctLbl.Size = UDim2.new(0, 60, 0, 11);
 	PctLbl.BackgroundTransparency = 1; PctLbl.Text = "0%";
 	PctLbl.TextColor3 = LightenAccent(Accent); PctLbl.TextSize = 11;
 	PctLbl.Font = Enum.Font.Gotham; PctLbl.TextXAlignment = Enum.TextXAlignment.Right;
@@ -454,12 +478,12 @@ function CreateLoader(Title, WindowSize)
 	-- capsule progress track + gradient fill + sheen
 	local Track = Instance.new("Frame");
 	Track.AnchorPoint = Vector2.new(0.5, 1);
-	Track.Position = UDim2.new(0.5, 0, 1, -20); Track.Size = UDim2.new(0, 248, 0, 9);
-	Track.BackgroundColor3 = Color3.fromHex("0B0B0E"); Track.BorderSizePixel = 0;
+	Track.Position = UDim2.new(0.5, 0, 1, -20); Track.Size = UDim2.new(0, 260, 0, 11);
+	Track.BackgroundColor3 = Color3.fromHex("101010"); Track.BorderSizePixel = 0;
 	Track.ClipsDescendants = true; Track.ZIndex = 3; Track.Parent = Root;
 	local TrackCorner = Instance.new("UICorner"); TrackCorner.CornerRadius = UDim.new(1, 0); TrackCorner.Parent = Track;
-	local TrackStroke = Instance.new("UIStroke"); TrackStroke.Color = Color3.fromHex("2E2E36");
-	TrackStroke.Thickness = 1; TrackStroke.Transparency = 0.35; TrackStroke.Parent = Track;
+	local TrackStroke = Instance.new("UIStroke"); TrackStroke.Color = Color3.fromHex("393939");
+	TrackStroke.Thickness = 1; TrackStroke.Transparency = 0.2; TrackStroke.Parent = Track;
 
 	local Fill = Instance.new("Frame");
 	Fill.Size = UDim2.new(0, 0, 1, 0);
@@ -498,7 +522,7 @@ function CreateLoader(Title, WindowSize)
 		RingGrad.Rotation = Spin;
 		HaloClock = HaloClock + DT;
 		AuraScale.Scale = 1.04 + 0.06 * math.sin(HaloClock * 2.4);
-		Aura.BackgroundTransparency = 0.62 + 0.1 * math.sin(HaloClock * 2.4 + 1.2);
+		Aura.BackgroundTransparency = 0.55 + 0.08 * math.sin(HaloClock * 2.4 + 1.2);
 		local A7 = 1 - math.exp(-DT * 7);
 		if math.abs(TargetP - ShownP) > 0.0005 then
 			ShownP = ShownP + (TargetP - ShownP) * A7;
@@ -550,7 +574,7 @@ function CreateLoader(Title, WindowSize)
 	end;
 
 	-- entrance: dim + fade/rise/pop
-	TweenService:Create(Dim, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 0.42 }):Play();
+	TweenService:Create(Dim, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 0.35 }):Play();
 	TweenService:Create(Root, TweenInfo.new(0.5, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
 		GroupTransparency = 0; Position = UDim2.new(0.5, 0, 0.5, 0);
 	}):Play();
@@ -11129,8 +11153,14 @@ do
 		if Source == nil or Source == false then
 			if Source == false then return nil end;
 			if DefaultLogoAsset == nil then
-				local Ok, A = pcall(getcustomasset, "Hydrogen/logo2.png");
-				DefaultLogoAsset = (Ok and A) or false;
+				local OkR, Data = pcall(readfile, "Hydrogen/logo2.png");
+				if OkR and type(Data) == "string" and #Data > 100 and string.sub(Data, 1, 4) == "\137PNG" then
+					local Ok, A = pcall(getcustomasset, "Hydrogen/logo2.png");
+					DefaultLogoAsset = (Ok and A) or false;
+				else
+					pcall(delfile, "Hydrogen/logo2.png"); -- 损坏缓存（链接死掉存了 HTML 错误页），清掉
+					DefaultLogoAsset = false;
+				end;
 			end;
 			return DefaultLogoAsset or nil;
 		end;
@@ -11227,12 +11257,21 @@ function Library:CreateLoading(Opts)
 	Library:CreateInstance("UIGradient", {
 		Parent = Root; Rotation = 90;
 		Color = NewColorSequence({
-			NewColorSequenceKeypoint(0, Color3.fromHex("1C1C22"));
-			NewColorSequenceKeypoint(1, Color3.fromHex("111114"));
+			NewColorSequenceKeypoint(0, Color3.fromHex("1E1E1E")); -- 与主窗口同 palette
+			NewColorSequenceKeypoint(1, Color3.fromHex("161616"));
 		});
 	});
 	Library:CreateInstance("UIStroke", {
-		Parent = Root; Color = Color3.fromHex("2E2E36"); Thickness = 1; Transparency = 0.15;
+		Parent = Root; Color = Color3.fromHex("000105"); Thickness = 1;
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
+	});
+	local CLInner = Library:CreateInstance("Frame", { -- 窗口式内灰描边，清晰可见
+		Parent = Root; Position = UDim2.new(0, 1, 0, 1); Size = UDim2.new(1, -2, 1, -2);
+		BackgroundTransparency = 1; BorderSizePixel = 0; ZIndex = 9;
+	});
+	Library:CreateInstance("UICorner", { Parent = CLInner; CornerRadius = UDim.new(0, 9) });
+	Library:CreateInstance("UIStroke", {
+		Parent = CLInner; Color = Color3.fromHex("393939"); Thickness = 1;
 		ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
 	});
 	-- 底部主题色内辉光
@@ -11281,7 +11320,7 @@ function Library:CreateLoading(Opts)
 	});
 	Library:CreateInstance("UICorner", { Parent = RingBase; CornerRadius = UDim.new(1, 0) });
 	Library:CreateInstance("UIStroke", {
-		Parent = RingBase; Color = Color3.fromHex("3A3A44"); Thickness = 2; Transparency = 0.45;
+		Parent = RingBase; Color = Color3.fromHex("393939"); Thickness = 2; Transparency = 0.2;
 	});
 	local Ring = Library:CreateInstance("Frame", {
 		Parent = Main; AnchorPoint = Vector2.new(0.5, 0);
@@ -11290,7 +11329,7 @@ function Library:CreateLoading(Opts)
 	});
 	Library:CreateInstance("UICorner", { Parent = Ring; CornerRadius = UDim.new(1, 0) });
 	local RingStroke = Library:CreateInstance("UIStroke", {
-		Parent = Ring; Color = Library.Accent; Thickness = 2;
+		Parent = Ring; Color = Library.Accent; Thickness = 3;
 	});
 	Library:RegisterAccent(RingStroke, "Color");
 	local RingGrad = Library:CreateInstance("UIGradient", {
@@ -11303,25 +11342,42 @@ function Library:CreateLoading(Opts)
 		});
 	});
 
-	-- 图标 + 呼吸光晕
-	local Halo = Library:CreateInstance("ImageLabel", {
+	-- 图标底座（主题色渐变圆角块）+ Logo；Logo 缺失时显示标题首字母，绝不空白
+	local Tile = Library:CreateInstance("Frame", {
 		Parent = Ring; AnchorPoint = Vector2.new(0.5, 0.5); ZIndex = 1;
-		Position = UDim2.new(0.5, 0, 0.5, 0); Size = UDim2.fromOffset(34, 34);
-		BackgroundTransparency = 1; BorderSizePixel = 0; ScaleType = Enum.ScaleType.Fit;
-		ImageColor3 = Library.Accent; ImageTransparency = 0.85;
+		Position = UDim2.new(0.5, 0, 0.5, 0); Size = UDim2.fromOffset(36, 36);
+		BackgroundColor3 = Library.Accent; BorderSizePixel = 0;
 	});
-	Library:RegisterAccent(Halo, "ImageColor3");
-	local HaloScale = Library:CreateInstance("UIScale", { Parent = Halo; Scale = 1 });
+	Library:CreateInstance("UICorner", { Parent = Tile; CornerRadius = UDim.new(0, 9) });
+	Library:RegisterAccent(Tile);
+	Library:CreateInstance("UIGradient", {
+		Parent = Tile; Rotation = 90;
+		Color = NewColorSequence({
+			NewColorSequenceKeypoint(0, Color3.fromHex("FFFFFF"));
+			NewColorSequenceKeypoint(1, Color3.fromHex("8A8A8A"));
+		});
+	});
+	Library:CreateInstance("UIStroke", {
+		Parent = Tile; Color = Color3.fromHex("FFFFFF"); Thickness = 1; Transparency = 0.82;
+	});
+	local TileScale = Library:CreateInstance("UIScale", { Parent = Tile; Scale = 1 });
 	local IconImg = Library:CreateInstance("ImageLabel", {
-		Parent = Ring; AnchorPoint = Vector2.new(0.5, 0.5); ZIndex = 2;
-		Position = UDim2.new(0.5, 0, 0.5, 0); Size = UDim2.fromOffset(26, 26);
+		Parent = Tile; AnchorPoint = Vector2.new(0.5, 0.5); ZIndex = 2;
+		Position = UDim2.new(0.5, 0, 0.5, 0); Size = UDim2.fromOffset(24, 24);
 		BackgroundTransparency = 1; BorderSizePixel = 0; ScaleType = Enum.ScaleType.Fit;
+	});
+	local MonoL = Library:CreateInstance("TextLabel", {
+		Parent = Tile; AnchorPoint = Vector2.new(0.5, 0.5); ZIndex = 2;
+		Position = UDim2.new(0.5, 0, 0.5, 0); Size = UDim2.new(1, 0, 1, 0);
+		BackgroundTransparency = 1; Text = string.upper(string.sub(TitleText, 1, 1));
+		TextColor3 = Color3.fromHex("FFFFFF"); TextSize = 17; Font = Enum.Font.GothamBold;
+		Visible = false;
 	});
 	local IconAsset = (IconSrc ~= false) and Library:_ResolveLogo(IconSrc) or nil;
 	if IconAsset then
-		IconImg.Image = IconAsset; Halo.Image = IconAsset;
+		IconImg.Image = IconAsset;
 	else
-		IconImg.Visible = false; Halo.Visible = false;
+		IconImg.Visible = false; MonoL.Visible = true;
 	end;
 
 	local TitleLbl = Library:CreateInstance("TextLabel", {
@@ -11360,11 +11416,11 @@ function Library:CreateLoading(Opts)
 	local Track = Library:CreateInstance("Frame", {
 		Parent = Main; AnchorPoint = Vector2.new(0.5, 1);
 		Position = UDim2.new(0.5, 0, 1, -20); Size = UDim2.new(1, -56, 0, 10);
-		BackgroundColor3 = Color3.fromHex("0B0B0E"); BorderSizePixel = 0; ClipsDescendants = true;
+		BackgroundColor3 = Color3.fromHex("101010"); BorderSizePixel = 0; ClipsDescendants = true;
 	});
 	Library:CreateInstance("UICorner", { Parent = Track; CornerRadius = UDim.new(1, 0) });
 	Library:CreateInstance("UIStroke", {
-		Parent = Track; Color = Color3.fromHex("2E2E36"); Thickness = 1; Transparency = 0.35;
+		Parent = Track; Color = Color3.fromHex("393939"); Thickness = 1; Transparency = 0.2;
 	});
 	local Fill = Library:CreateInstance("Frame", {
 		Parent = Track; Position = UDim2.new(0, 0, 0, 0); Size = UDim2.new(0, 0, 1, 0);
@@ -11389,12 +11445,12 @@ function Library:CreateLoading(Opts)
 	local SidebarFrame = Library:CreateInstance("CanvasGroup", {
 		Parent = Root; AnchorPoint = Vector2.new(1, 0); ZIndex = 3;
 		Position = UDim2.new(1, 0, 0, 0); Size = UDim2.new(0, SideW, 1, 0);
-		BackgroundColor3 = Color3.fromHex("141419"); BorderSizePixel = 0;
+		BackgroundColor3 = Color3.fromHex("151515"); BorderSizePixel = 0;
 		Visible = false; GroupTransparency = 1;
 	});
 	Library:CreateInstance("Frame", { -- 左侧分隔线
 		Parent = SidebarFrame; Size = UDim2.new(0, 1, 1, 0);
-		BackgroundColor3 = Color3.fromHex("2E2E36"); BorderSizePixel = 0;
+		BackgroundColor3 = Color3.fromHex("393939"); BorderSizePixel = 0;
 	});
 	local SideBody = Library:CreateInstance("Frame", {
 		Parent = SidebarFrame; Position = UDim2.new(0, 12, 0, 12); Size = UDim2.new(1, -22, 1, -24);
@@ -11420,8 +11476,7 @@ function Library:CreateLoading(Opts)
 		SpinAngle = (SpinAngle + DT * 140) % 360;
 		RingGrad.Rotation = SpinAngle;
 		HaloClock = HaloClock + DT;
-		HaloScale.Scale = 1.08 + 0.08 * math.sin(HaloClock * 2.4);
-		Halo.ImageTransparency = 0.82 + 0.1 * math.sin(HaloClock * 2.4 + 1.2);
+		TileScale.Scale = 1.03 + 0.03 * math.sin(HaloClock * 2.4); -- 图标底座轻微呼吸
 		local A = 1 - math.exp(-DT * 7);
 		if math.abs(TargetProgress - ShownProgress) > 0.0005 then
 			ShownProgress = ShownProgress + (TargetProgress - ShownProgress) * A;
