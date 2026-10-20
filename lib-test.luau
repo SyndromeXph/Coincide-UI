@@ -245,282 +245,267 @@ local function check()
 	return true
 end
 
--- [MOBILE PATCH] premium startup splash: same Drawing-based loader contract as before
--- (CreateLoader(Title, Size) + SetText steps below), but restyled and fully animated.
--- One RenderStepped driver runs everything: fade+rise entrance, rotating chase arc,
--- breathing halo, exponential progress fill, sheen sweep, cross-fading status text,
--- fade-out exit. Drawing has no gradients, so the body gradient / glow are strip-faked.
+-- [MOBILE PATCH] premium startup splash: real GUI panel matching the library window style
+-- (rounded gradient card, accent chase ring + breathing halo around the logo, capsule
+-- progress with sheen + live percent, cross-fading status text, dim + rise/fade entrance).
+-- One RenderStepped driver runs all motion; SetText contract and load steps unchanged.
 function CreateLoader(Title, WindowSize)
-    local Camera = Workspace.CurrentCamera
-    local Vp = Camera and Camera.ViewportSize or Vector2.new(800, 600)
-    local PW, PH = 320, 188
-    local BX = (Vp.X - PW) / 2
-    local BY = (Vp.Y - PH) / 2
-    local CX = BX + PW / 2
+	local Accent = Library.Accent or Color3.fromHex("99bcff");
+	local Gui = Instance.new("ScreenGui");
+	Gui.Name = "CoincideBootLoader";
+	Gui.IgnoreGuiInset = true;
+	Gui.ResetOnSpawn = false;
+	Gui.DisplayOrder = 9999;
+	Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
+	pcall(function() Gui.Parent = (gethui and gethui()) or CoreGui; end);
+	if not Gui.Parent then pcall(function() Gui.Parent = CoreGui; end); end;
 
-    local Accent = Library.Accent or Color3.fromHex("99bcff")
-    local FadeList = {} -- {O, BaseTransparency} faded by master alpha
-    local RiseList = {} -- {O, X, Y} static positions, shifted by rise offset
-    local All = {}
+	local Dim = Instance.new("Frame");
+	Dim.Size = UDim2.new(1, 0, 1, 0);
+	Dim.BackgroundColor3 = Color3.fromHex("000000");
+	Dim.BackgroundTransparency = 1;
+	Dim.BorderSizePixel = 0;
+	Dim.Parent = Gui;
 
-    local function New(Class)
-        local D = Drawing.new(Class)
-        D.Visible = true
-        table.insert(All, D)
-        return D
-    end
-    local function Reg(D, BaseT, X, Y)
-        D.Transparency = 1
-        table.insert(FadeList, { O = D, T = BaseT or 0 })
-        if X then table.insert(RiseList, { O = D, X = X, Y = Y }) end
-        return D
-    end
+	local PW, PH = 320, 186;
+	local Root = Instance.new("CanvasGroup");
+	Root.AnchorPoint = Vector2.new(0.5, 0.5);
+	Root.Position = UDim2.new(0.5, 0, 0.5, 14);
+	Root.Size = UDim2.fromOffset(PW, PH);
+	Root.BackgroundColor3 = Color3.fromHex("FFFFFF");
+	Root.BorderSizePixel = 0;
+	Root.GroupTransparency = 1;
+	Root.Parent = Gui;
+	local RootCorner = Instance.new("UICorner"); RootCorner.CornerRadius = UDim.new(0, 10); RootCorner.Parent = Root;
+	local BgGrad = Instance.new("UIGradient"); BgGrad.Rotation = 90; BgGrad.Color = NewColorSequence({
+		NewColorSequenceKeypoint(0, Color3.fromHex("1C1C22"));
+		NewColorSequenceKeypoint(1, Color3.fromHex("111114"));
+	}); BgGrad.Parent = Root;
+	local RootStroke = Instance.new("UIStroke"); RootStroke.Color = Color3.fromHex("2E2E36");
+	RootStroke.Thickness = 1; RootStroke.Transparency = 0.15;
+	RootStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border; RootStroke.Parent = Root;
 
-    -- background dim
-    local Dim = New("Square")
-    Dim.Filled = true; Dim.Thickness = 0; Dim.Color = Color3.fromHex("000000")
-    Dim.Size = Vp; Dim.Position = Vector2.new(0, 0)
-    Reg(Dim, 0.42)
+	-- top highlight line, fading at both ends
+	local TopLine = Instance.new("Frame");
+	TopLine.Position = UDim2.new(0, 12, 0, 0); TopLine.Size = UDim2.new(1, -24, 0, 1);
+	TopLine.BackgroundColor3 = Color3.fromHex("FFFFFF"); TopLine.BorderSizePixel = 0;
+	TopLine.ZIndex = 10; TopLine.Parent = Root;
+	local TopGrad = Instance.new("UIGradient");
+	TopGrad.Color = NewColorSequence({
+		NewColorSequenceKeypoint(0,   Accent);
+		NewColorSequenceKeypoint(0.5, LightenAccent(Accent));
+		NewColorSequenceKeypoint(1,   Accent);
+	});
+	TopGrad.Transparency = NewNumberSequence({
+		NewNumberSequenceKeypoint(0,   1);
+		NewNumberSequenceKeypoint(0.3, 0.15);
+		NewNumberSequenceKeypoint(0.7, 0.15);
+		NewNumberSequenceKeypoint(1,   1);
+	});
+	TopGrad.Parent = TopLine;
 
-    -- panel border + strip-faked vertical gradient body
-    local Border = New("Square")
-    Border.Filled = true; Border.Thickness = 0; Border.Color = Color3.fromHex("2E2E36")
-    Border.Size = Vector2.new(PW, PH)
-    Reg(Border, 0.15, BX, BY)
+	-- bottom accent glow
+	local Glow = Instance.new("Frame");
+	Glow.AnchorPoint = Vector2.new(0.5, 1);
+	Glow.Position = UDim2.new(0.5, 0, 1, 0); Glow.Size = UDim2.new(1, 0, 0, 26);
+	Glow.BackgroundColor3 = Accent; Glow.BorderSizePixel = 0; Glow.ZIndex = 1; Glow.Parent = Root;
+	local GlowGrad = Instance.new("UIGradient"); GlowGrad.Rotation = 90;
+	GlowGrad.Transparency = NewNumberSequence({
+		NewNumberSequenceKeypoint(0, 1);
+		NewNumberSequenceKeypoint(1, 0.84);
+	});
+	GlowGrad.Parent = Glow;
 
-    local Strips = 22
-    local StripH = (PH - 2) / Strips
-    for I = 0, Strips - 1 do
-        local T = I / (Strips - 1)
-        local S = New("Square")
-        S.Filled = true; S.Thickness = 0
-        S.Color = Color3.fromRGB(
-            math.floor(0x1C + (0x11 - 0x1C) * T + 0.5),
-            math.floor(0x1C + (0x11 - 0x1C) * T + 0.5),
-            math.floor(0x22 + (0x14 - 0x22) * T + 0.5))
-        S.Size = Vector2.new(PW - 2, StripH + 1) -- +1 kills seams
-        Reg(S, 0, BX + 1, BY + 1 + I * StripH)
-    end
+	local PopScale = Instance.new("UIScale"); PopScale.Scale = 0.94; PopScale.Parent = Root;
 
-    -- top highlight line, fading at both ends
-    local TLSegs = 18
-    for I = 0, TLSegs - 1 do
-        local T = I / (TLSegs - 1)
-        local Env = 1 - math.abs(T - 0.5) * 2
-        local L = New("Square")
-        L.Filled = true; L.Thickness = 0; L.Color = Accent
-        L.Size = Vector2.new((PW - 24) / TLSegs + 0.5, 1)
-        Reg(L, 1 - Env * 0.85, BX + 12 + I * (PW - 24) / TLSegs, BY)
-    end
+	-- chase ring + breathing halo + logo
+	local RingCY = 46;
+	local RingBase = Instance.new("Frame");
+	RingBase.AnchorPoint = Vector2.new(0.5, 0.5);
+	RingBase.Position = UDim2.new(0.5, 0, 0, RingCY);
+	RingBase.Size = UDim2.fromOffset(54, 54);
+	RingBase.BackgroundTransparency = 1; RingBase.BorderSizePixel = 0; RingBase.ZIndex = 3; RingBase.Parent = Root;
+	local RingBaseCorner = Instance.new("UICorner"); RingBaseCorner.CornerRadius = UDim.new(1, 0); RingBaseCorner.Parent = RingBase;
+	local RingBaseStroke = Instance.new("UIStroke"); RingBaseStroke.Color = Color3.fromHex("3A3A44");
+	RingBaseStroke.Thickness = 2; RingBaseStroke.Transparency = 0.45; RingBaseStroke.Parent = RingBase;
 
-    -- bottom accent glow (strips, denser toward the bottom edge)
-    local GlowH, GlowStrips = 24, 12
-    for I = 0, GlowStrips - 1 do
-        local T = I / (GlowStrips - 1)
-        local S = New("Square")
-        S.Filled = true; S.Thickness = 0; S.Color = Accent
-        S.Size = Vector2.new(PW - 2, GlowH / GlowStrips + 1)
-        Reg(S, 0.99 - T * 0.17, BX + 1, BY + PH - 1 - GlowH + I * (GlowH / GlowStrips))
-    end
+	local Ring = Instance.new("Frame");
+	Ring.AnchorPoint = Vector2.new(0.5, 0.5);
+	Ring.Position = UDim2.new(0.5, 0, 0, RingCY);
+	Ring.Size = UDim2.fromOffset(54, 54);
+	Ring.BackgroundTransparency = 1; Ring.BorderSizePixel = 0; Ring.ZIndex = 4; Ring.Parent = Root;
+	local RingCorner = Instance.new("UICorner"); RingCorner.CornerRadius = UDim.new(1, 0); RingCorner.Parent = Ring;
+	local RingStroke = Instance.new("UIStroke"); RingStroke.Color = Accent; RingStroke.Thickness = 2; RingStroke.Parent = Ring;
+	local RingGrad = Instance.new("UIGradient");
+	RingGrad.Transparency = NewNumberSequence({
+		NewNumberSequenceKeypoint(0,    0);
+		NewNumberSequenceKeypoint(0.30, 0.05);
+		NewNumberSequenceKeypoint(0.75, 1);
+		NewNumberSequenceKeypoint(1,    1);
+	});
+	RingGrad.Parent = RingStroke;
 
-    -- logo (may not exist on a broken setup; the ring alone still looks fine)
-    local LogoSize = 52
-    local LogoCY = BY + 16 + LogoSize / 2
-    local Icon = New("Image")
-    local OkLogo, LogoData = pcall(readfile, "Hydrogen/logo2.png")
-    if OkLogo and LogoData then
-        Icon.Data = LogoData
-        Icon.Size = Vector2.new(LogoSize, LogoSize)
-        Icon.Rounding = 8
-        Reg(Icon, 0, CX - LogoSize / 2, LogoCY - LogoSize / 2)
-    else
-        Icon.Visible = false
-    end
+	local Halo = Instance.new("ImageLabel");
+	Halo.AnchorPoint = Vector2.new(0.5, 0.5);
+	Halo.Position = UDim2.new(0.5, 0, 0, RingCY);
+	Halo.Size = UDim2.fromOffset(34, 34);
+	Halo.BackgroundTransparency = 1; Halo.BorderSizePixel = 0; Halo.ScaleType = Enum.ScaleType.Fit;
+	Halo.ImageColor3 = Accent; Halo.ImageTransparency = 0.85; Halo.ZIndex = 3; Halo.Parent = Root;
+	local HaloScale = Instance.new("UIScale"); HaloScale.Parent = Halo;
 
-    -- breathing halo + base ring + rotating chase arc
-    local Halo = New("Circle")
-    Halo.Filled = true; Halo.Color = Accent; Halo.NumSides = 48; Halo.Thickness = 1
-    Halo.Transparency = 1
-    local Ring = New("Circle")
-    Ring.Filled = false; Ring.Color = Color3.fromHex("3A3A44"); Ring.NumSides = 48
-    Ring.Thickness = 2; Ring.Radius = 36; Ring.Transparency = 1
-    local NSEG = 22
-    local ArcSegs = {}
-    for I = 1, NSEG do
-        local L = New("Line")
-        L.Thickness = 2; L.Color = Accent; L.Transparency = 1
-        ArcSegs[I] = L
-    end
+	local Icon = Instance.new("ImageLabel");
+	Icon.AnchorPoint = Vector2.new(0.5, 0.5);
+	Icon.Position = UDim2.new(0.5, 0, 0, RingCY);
+	Icon.Size = UDim2.fromOffset(26, 26);
+	Icon.BackgroundTransparency = 1; Icon.BorderSizePixel = 0; Icon.ScaleType = Enum.ScaleType.Fit;
+	Icon.ZIndex = 5; Icon.Parent = Root;
+	local OkAsset, LogoAsset = pcall(getcustomasset, "Hydrogen/logo2.png");
+	if OkAsset and LogoAsset then
+		Icon.Image = LogoAsset; Halo.Image = LogoAsset;
+	else
+		Icon.Visible = false; Halo.Visible = false;
+	end;
 
-    -- texts
-    local TitleD = New("Text")
-    TitleD.Font = Drawing.Fonts.Plex; TitleD.Size = 14; TitleD.Color = Color3.fromHex("FFFFFF")
-    TitleD.Center = true; TitleD.Outline = false; TitleD.Text = tostring(Title or "Loading")
-    Reg(TitleD, 0, CX, BY + 82)
+	-- texts
+	local TitleLbl = Instance.new("TextLabel");
+	TitleLbl.Position = UDim2.new(0, 0, 0, 80); TitleLbl.Size = UDim2.new(1, 0, 0, 15);
+	TitleLbl.BackgroundTransparency = 1; TitleLbl.Text = tostring(Title or "Loading");
+	TitleLbl.TextColor3 = Color3.fromHex("FFFFFF"); TitleLbl.TextSize = 14;
+	TitleLbl.Font = Enum.Font.GothamMedium; TitleLbl.ZIndex = 3; TitleLbl.Parent = Root;
 
-    local MsgD = New("Text")
-    MsgD.Font = Drawing.Fonts.Plex; MsgD.Size = 12; MsgD.Color = Accent
-    MsgD.Center = true; MsgD.Outline = false; MsgD.Text = ""
-    Reg(MsgD, 0, CX, BY + 101)
+	local MsgLbl = Instance.new("TextLabel");
+	MsgLbl.Position = UDim2.new(0, 0, 0, 99); MsgLbl.Size = UDim2.new(1, 0, 0, 13);
+	MsgLbl.BackgroundTransparency = 1; MsgLbl.Text = "";
+	MsgLbl.TextColor3 = Accent; MsgLbl.TextSize = 12;
+	MsgLbl.Font = Enum.Font.Gotham; MsgLbl.ZIndex = 3; MsgLbl.Parent = Root;
 
-    local TW, TH = 240, 8
-    local BarX, BarY = CX - TW / 2, BY + PH - 32
-    local PctD = New("Text")
-    PctD.Font = Drawing.Fonts.Plex; PctD.Size = 11; PctD.Color = Color3.fromHex("8C8F99")
-    PctD.Center = false; PctD.Outline = false; PctD.Text = "0%"
-    Reg(PctD, 0, BarX + TW - 26, BarY - 16)
+	local PctLbl = Instance.new("TextLabel");
+	PctLbl.AnchorPoint = Vector2.new(1, 0);
+	PctLbl.Position = UDim2.new(1, -36, 0, PH - 52); PctLbl.Size = UDim2.new(0, 60, 0, 11);
+	PctLbl.BackgroundTransparency = 1; PctLbl.Text = "0%";
+	PctLbl.TextColor3 = Color3.fromHex("8C8F99"); PctLbl.TextSize = 11;
+	PctLbl.Font = Enum.Font.Gotham; PctLbl.TextXAlignment = Enum.TextXAlignment.Right;
+	PctLbl.ZIndex = 3; PctLbl.Parent = Root;
 
-    -- capsule progress track
-    local Track = New("Square")
-    Track.Filled = true; Track.Thickness = 0; Track.Color = Color3.fromHex("0B0B0E")
-    Track.Size = Vector2.new(TW, TH)
-    Reg(Track, 0, BarX, BarY)
-    local TrackL = New("Circle")
-    TrackL.Filled = true; TrackL.Color = Track.Color; TrackL.NumSides = 24; TrackL.Radius = TH / 2
-    Reg(TrackL, 0, BarX, BarY + TH / 2)
-    local TrackR = New("Circle")
-    TrackR.Filled = true; TrackR.Color = Track.Color; TrackR.NumSides = 24; TrackR.Radius = TH / 2
-    Reg(TrackR, 0, BarX + TW, BarY + TH / 2)
-    local TrackB = New("Square")
-    TrackB.Filled = false; TrackB.Thickness = 1; TrackB.Color = Color3.fromHex("2E2E36")
-    TrackB.Size = Vector2.new(TW, TH)
-    Reg(TrackB, 0.35, BarX, BarY)
+	-- capsule progress track + gradient fill + sheen
+	local Track = Instance.new("Frame");
+	Track.AnchorPoint = Vector2.new(0.5, 1);
+	Track.Position = UDim2.new(0.5, 0, 1, -20); Track.Size = UDim2.new(0, 248, 0, 9);
+	Track.BackgroundColor3 = Color3.fromHex("0B0B0E"); Track.BorderSizePixel = 0;
+	Track.ClipsDescendants = true; Track.ZIndex = 3; Track.Parent = Root;
+	local TrackCorner = Instance.new("UICorner"); TrackCorner.CornerRadius = UDim.new(1, 0); TrackCorner.Parent = Track;
+	local TrackStroke = Instance.new("UIStroke"); TrackStroke.Color = Color3.fromHex("2E2E36");
+	TrackStroke.Thickness = 1; TrackStroke.Transparency = 0.35; TrackStroke.Parent = Track;
 
-    -- fill + rounded leading cap + sheen (all driven per-frame)
-    local Fill = New("Square")
-    Fill.Filled = true; Fill.Thickness = 0; Fill.Color = Accent; Fill.Transparency = 1
-    local FillCap = New("Circle")
-    FillCap.Filled = true; FillCap.Color = Accent; FillCap.NumSides = 24
-    FillCap.Radius = TH / 2; FillCap.Transparency = 1
-    local Sheen = New("Square")
-    Sheen.Filled = true; Sheen.Thickness = 0; Sheen.Color = Color3.fromHex("FFFFFF")
-    Sheen.Size = Vector2.new(14, TH); Sheen.Transparency = 1
+	local Fill = Instance.new("Frame");
+	Fill.Size = UDim2.new(0, 0, 1, 0);
+	Fill.BackgroundColor3 = Color3.fromHex("FFFFFF"); Fill.BorderSizePixel = 0;
+	Fill.ClipsDescendants = true; Fill.ZIndex = 4; Fill.Parent = Track;
+	local FillCorner = Instance.new("UICorner"); FillCorner.CornerRadius = UDim.new(1, 0); FillCorner.Parent = Fill;
+	local FillGrad = Instance.new("UIGradient");
+	FillGrad.Color = NewColorSequence({
+		NewColorSequenceKeypoint(0,   Accent);
+		NewColorSequenceKeypoint(0.5, LightenAccent(Accent));
+		NewColorSequenceKeypoint(1,   Accent);
+	});
+	FillGrad.Parent = Fill;
+	local Sheen = Instance.new("Frame");
+	Sheen.Size = UDim2.new(0, 42, 1, 0); Sheen.Position = UDim2.new(-0.2, -20, 0, 0);
+	Sheen.BackgroundColor3 = Color3.fromHex("FFFFFF"); Sheen.BorderSizePixel = 0;
+	Sheen.ZIndex = 5; Sheen.Parent = Fill;
+	local SheenGrad = Instance.new("UIGradient");
+	SheenGrad.Transparency = NewNumberSequence({
+		NewNumberSequenceKeypoint(0,   1);
+		NewNumberSequenceKeypoint(0.5, 0.55);
+		NewNumberSequenceKeypoint(1,   1);
+	});
+	SheenGrad.Parent = Sheen;
 
-    -- animation state
-    local Birth = tick()
-    local MasterA = 0
-    local Closing, Cleaned = false, false
-    local TargetP, ShownP = 0, 0
-    local Phase, HaloClock, SheenClock = 0, 0, 0
-    local MsgA, MsgOut, PendingMsg = 1, false, nil
-    local RingR = 36
-    local ArcSpan = math.rad(150)
+	-- motion state, one driver
+	local Closing, Cleaned = false, false;
+	local TargetP, ShownP = 0, 0;
+	local Spin, HaloClock, SheenClock = 0, 0, 0;
+	local MsgA, MsgOut, PendingMsg = 1, false, nil;
 
-    local Conn
-    Conn = RunService.RenderStepped:Connect(function(DT)
-        if Cleaned then return end
+	local Conn;
+	Conn = RunService.RenderStepped:Connect(function(DT)
+		if Cleaned then return end;
+		Spin = (Spin + DT * 140) % 360;
+		RingGrad.Rotation = Spin;
+		HaloClock = HaloClock + DT;
+		HaloScale.Scale = 1.08 + 0.08 * math.sin(HaloClock * 2.4);
+		Halo.ImageTransparency = 0.82 + 0.1 * math.sin(HaloClock * 2.4 + 1.2);
+		local A7 = 1 - math.exp(-DT * 7);
+		if math.abs(TargetP - ShownP) > 0.0005 then
+			ShownP = ShownP + (TargetP - ShownP) * A7;
+		else
+			ShownP = TargetP;
+		end;
+		Fill.Size = UDim2.new(ShownP, 0, 1, 0);
+		PctLbl.Text = tostring(math.floor(ShownP * 100 + 0.5)) .. "%";
+		SheenClock = (SheenClock + DT * 0.55) % 1;
+		Sheen.Position = UDim2.new(SheenClock * 1.4 - 0.2, -20, 0, 0);
+		if MsgOut then
+			MsgA = MsgA - DT / 0.10;
+			if MsgA <= 0 then
+				MsgA = 0;
+				MsgLbl.Text = PendingMsg or "";
+				PendingMsg = nil;
+				MsgOut = false;
+			end;
+		elseif MsgA < 1 then
+			MsgA = math.min(1, MsgA + DT / 0.16);
+		end;
+		MsgLbl.TextTransparency = 1 - MsgA;
+	end);
 
-        if Closing then
-            MasterA = math.max(0, MasterA - DT / 0.35)
-        else
-            MasterA = math.min(1, (tick() - Birth) / 0.45)
-        end
-        local T0 = math.min((tick() - Birth) / 0.5, 1)
-        local RY = (1 - T0) ^ 4 * 14 -- rise: 14px -> 0, quart-out
-        if Closing then RY = RY + (1 - MasterA) * 8 end -- settle-down on exit
+	local Max = 2;
+	local function SetText(Val, Txt)
+		TargetP = math.clamp((tonumber(Val) or 0) / Max, 0, 1);
+		Txt = tostring(Txt or "");
+		if MsgLbl.Text == "" and not MsgOut then
+			MsgLbl.Text = Txt; -- first message: no cross-fade flicker
+		elseif Txt ~= MsgLbl.Text then
+			PendingMsg = Txt;
+			MsgOut = true;
+		end;
+	end;
+	local function Cleanup()
+		if Closing then return end;
+		Closing = true;
+		TweenService:Create(Dim, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { BackgroundTransparency = 1 }):Play();
+		TweenService:Create(Root, TweenInfo.new(0.32, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+			GroupTransparency = 1; Position = UDim2.new(0.5, 0, 0.5, 8);
+		}):Play();
+		TweenService:Create(PopScale, TweenInfo.new(0.32, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Scale = 0.96 }):Play();
+		task.delay(0.38, function()
+			Cleaned = true;
+			Conn:Disconnect();
+			pcall(function() Gui:Destroy() end);
+		end);
+	end;
 
-        for _, E in FadeList do E.O.Transparency = 1 - (1 - E.T) * MasterA end
-        for _, E in RiseList do E.O.Position = Vector2.new(E.X, E.Y + RY) end
+	-- entrance: dim + fade/rise/pop
+	TweenService:Create(Dim, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 0.42 }):Play();
+	TweenService:Create(Root, TweenInfo.new(0.5, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+		GroupTransparency = 0; Position = UDim2.new(0.5, 0, 0.5, 0);
+	}):Play();
+	TweenService:Create(PopScale, TweenInfo.new(0.55, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Scale = 1 }):Play();
 
-        -- ring / halo / chase arc
-        local LCY = LogoCY + RY
-        Ring.Position = Vector2.new(CX, LCY)
-        Ring.Transparency = 1 - 0.55 * MasterA
-        HaloClock = HaloClock + DT
-        Halo.Position = Vector2.new(CX, LCY)
-        Halo.Radius = 29 + 4 * math.sin(HaloClock * 2.4)
-        Halo.Transparency = 1 - (0.12 - 0.06 * math.sin(HaloClock * 2.4 + 1.2)) * MasterA
-        Phase = Phase + DT * 2.6
-        for I = 1, NSEG do
-            local A0 = Phase + (I - 1) / NSEG * ArcSpan
-            local A1 = Phase + I / NSEG * ArcSpan
-            local L = ArcSegs[I]
-            L.From = Vector2.new(CX + math.cos(A0) * RingR, LCY + math.sin(A0) * RingR)
-            L.To   = Vector2.new(CX + math.cos(A1) * RingR, LCY + math.sin(A1) * RingR)
-            local Tail = I / NSEG
-            L.Transparency = 1 - (0.05 + Tail * 0.93) * MasterA
-        end
+	SetText(0.3, "UI Initialization [ Downloading ]")
+	wait(0.2)
 
-        -- progress: exponential smoothing (no step jumps)
-        local A7 = 1 - math.exp(-DT * 7)
-        if math.abs(TargetP - ShownP) > 0.0005 then
-            ShownP = ShownP + (TargetP - ShownP) * A7
-        else
-            ShownP = TargetP
-        end
-        local FillW = TW * ShownP
-        if FillW > 1 then
-            local W = math.min(math.max(FillW, TH), TW)
-            Fill.Visible = true; FillCap.Visible = true
-            Fill.Size = Vector2.new(W, TH)
-            Fill.Position = Vector2.new(BarX, BarY + RY)
-            FillCap.Position = Vector2.new(BarX + W, BarY + TH / 2 + RY)
-            Fill.Transparency = 1 - MasterA
-            FillCap.Transparency = 1 - MasterA
-            if W > 40 then -- sheen sweep
-                SheenClock = (SheenClock + DT * 0.5) % 1
-                local SX = (SheenClock * 1.4 - 0.2) * (W - 14)
-                Sheen.Visible = true
-                Sheen.Position = Vector2.new(BarX + math.clamp(SX, 0, W - 14), BarY + RY)
-                Sheen.Transparency = 1 - 0.78 * MasterA
-            else
-                Sheen.Visible = false
-            end
-        else
-            Fill.Visible = false; FillCap.Visible = false; Sheen.Visible = false
-        end
-        PctD.Text = tostring(math.floor(ShownP * 100 + 0.5)) .. "%"
+	local function DownloadImage(Path, Url)
+		if isfile(Path) then
+			return readfile(Path)
+		else
+			local Data = game:HttpGet(Url)
+			writefile(Path, Data)
+			return Data
+		end
+	end
 
-        -- status text cross-fade
-        if MsgOut then
-            MsgA = MsgA - DT / 0.10
-            if MsgA <= 0 then
-                MsgA = 0
-                MsgD.Text = PendingMsg or ""
-                PendingMsg = nil
-                MsgOut = false
-            end
-        elseif MsgA < 1 then
-            MsgA = math.min(1, MsgA + DT / 0.16)
-        end
-        MsgD.Transparency = 1 - MsgA * MasterA
-
-        if Closing and MasterA <= 0 then
-            Cleaned = true
-            Conn:Disconnect()
-            for _, D in All do pcall(function() D:Remove() end) end
-        end
-    end)
-
-    local Max = 2
-    local function SetText(Val, Txt)
-        TargetP = math.clamp((tonumber(Val) or 0) / Max, 0, 1)
-        Txt = tostring(Txt or "")
-        if MsgD.Text == "" and not MsgOut then
-            MsgD.Text = Txt -- first message: no cross-fade flicker
-        elseif Txt ~= MsgD.Text then
-            PendingMsg = Txt
-            MsgOut = true
-        end
-    end
-    local function Cleanup()
-        Closing = true -- fade-out + removal finish inside the driver
-    end
-
-    SetText(0.3, "UI Initialization [ Downloading ]")
-    wait(0.2)
-
-    local function DownloadImage(Path, Url)
-        if isfile(Path) then
-            return readfile(Path)
-        else
-            local Data = game:HttpGet(Url)
-            writefile(Path, Data)
-            return Data
-        end
-    end
-
-    SetText(0.5, "Checking Assets")
+	SetText(0.5, "Checking Assets")
 	local c = check()
 	if c == false then
 		SetText(1, "Asset Check Function Returned False.")
