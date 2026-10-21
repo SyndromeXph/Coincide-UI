@@ -252,374 +252,181 @@ local function check()
 	return true
 end
 
--- [MOBILE PATCH] premium startup splash: real GUI panel matching the library window style
--- (rounded gradient card, accent chase ring + breathing halo around the logo, capsule
--- progress with sheen + live percent, cross-fading status text, dim + rise/fade entrance).
--- One RenderStepped driver runs all motion; SetText contract and load steps unchanged.
 function CreateLoader(Title, WindowSize)
-	local Accent = Library.Accent or Color3.fromHex("99bcff");
-	local Gui = Instance.new("ScreenGui");
-	Gui.Name = "CoincideBootLoader";
-	Gui.IgnoreGuiInset = true;
-	Gui.ResetOnSpawn = false;
-	Gui.DisplayOrder = 9999;
-	Gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
-	pcall(function() Gui.Parent = (gethui and gethui()) or CoreGui; end);
-	if not Gui.Parent then pcall(function() Gui.Parent = CoreGui; end); end;
+    local Camera = Workspace.CurrentCamera
 
-	local Dim = Instance.new("Frame");
-	Dim.Size = UDim2.new(1, 0, 1, 0);
-	Dim.BackgroundColor3 = Color3.fromHex("000000");
-	Dim.BackgroundTransparency = 1;
-	Dim.BorderSizePixel = 0;
-	Dim.Parent = Gui;
 
-	local PW, PH = 320, 196;
-	local Root = Instance.new("CanvasGroup");
-	Root.AnchorPoint = Vector2.new(0.5, 0.5);
-	Root.Position = UDim2.new(0.5, 0, 0.5, 14);
-	Root.Size = UDim2.fromOffset(PW, PH);
-	Root.BackgroundColor3 = Color3.fromHex("FFFFFF");
-	Root.BorderSizePixel = 0;
-	Root.GroupTransparency = 1;
-	Root.Parent = Gui;
-	local RootCorner = Instance.new("UICorner"); RootCorner.CornerRadius = UDim.new(0, 10); RootCorner.Parent = Root;
-	local BgGrad = Instance.new("UIGradient"); BgGrad.Rotation = 90; BgGrad.Color = NewColorSequence({
-		NewColorSequenceKeypoint(0, Color3.fromHex("1E1E1E")); -- exact window palette
-		NewColorSequenceKeypoint(1, Color3.fromHex("161616"));
-	}); BgGrad.Parent = Root;
-	local RootStroke = Instance.new("UIStroke"); RootStroke.Color = Color3.fromHex("000105"); -- window outer outline
-	RootStroke.Thickness = 1; RootStroke.Transparency = 0;
-	RootStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border; RootStroke.Parent = Root;
-	local InnerLine = Instance.new("Frame"); -- window-style inner gray stroke, clearly visible
-	InnerLine.Position = UDim2.new(0, 1, 0, 1); InnerLine.Size = UDim2.new(1, -2, 1, -2);
-	InnerLine.BackgroundTransparency = 1; InnerLine.BorderSizePixel = 0; InnerLine.ZIndex = 9; InnerLine.Parent = Root;
-	local InnerCorner = Instance.new("UICorner"); InnerCorner.CornerRadius = UDim.new(0, 9); InnerCorner.Parent = InnerLine;
-	local InnerStroke = Instance.new("UIStroke"); InnerStroke.Color = Color3.fromHex("393939");
-	InnerStroke.Thickness = 1; InnerStroke.Transparency = 0;
-	InnerStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border; InnerStroke.Parent = InnerLine;
+    local Drawings = {}
 
-	-- top highlight line, fading at both ends
-	local TopLine = Instance.new("Frame");
-	TopLine.Position = UDim2.new(0, 12, 0, 0); TopLine.Size = UDim2.new(1, -24, 0, 1);
-	TopLine.BackgroundColor3 = Color3.fromHex("FFFFFF"); TopLine.BorderSizePixel = 0;
-	TopLine.ZIndex = 10; TopLine.Parent = Root;
-	local TopGrad = Instance.new("UIGradient");
-	TopGrad.Color = NewColorSequence({
-		NewColorSequenceKeypoint(0,   Accent);
-		NewColorSequenceKeypoint(0.5, LightenAccent(Accent));
-		NewColorSequenceKeypoint(1,   Accent);
-	});
-	TopGrad.Transparency = NewNumberSequence({
-		NewNumberSequenceKeypoint(0,   1);
-		NewNumberSequenceKeypoint(0.3, 0.05);
-		NewNumberSequenceKeypoint(0.7, 0.05);
-		NewNumberSequenceKeypoint(1,   1);
-	});
-	TopGrad.Parent = TopLine;
 
-	-- bottom accent glow
-	local Glow = Instance.new("Frame");
-	Glow.AnchorPoint = Vector2.new(0.5, 1);
-	Glow.Position = UDim2.new(0.5, 0, 1, 0); Glow.Size = UDim2.new(1, 0, 0, 26);
-	Glow.BackgroundColor3 = Accent; Glow.BorderSizePixel = 0; Glow.ZIndex = 1; Glow.Parent = Root;
-	local GlowGrad = Instance.new("UIGradient"); GlowGrad.Rotation = 90;
-	GlowGrad.Transparency = NewNumberSequence({
-		NewNumberSequenceKeypoint(0, 1);
-		NewNumberSequenceKeypoint(1, 0.72);
-	});
-	GlowGrad.Parent = Glow;
+    local MiddleX = (Camera.ViewportSize.X / 2) - (WindowSize.X / 2)
+    local MiddleY = (Camera.ViewportSize.Y / 2) - (WindowSize.Y / 2)
 
-	local PopScale = Instance.new("UIScale"); PopScale.Scale = 0.94; PopScale.Parent = Root;
+    local WindowOutline = Drawing.new("Square")
+    WindowOutline.Size = WindowSize
+    WindowOutline.Thickness = 0
+    WindowOutline.Color = Color3.fromHex("#000005")
+    WindowOutline.Visible = true
+    WindowOutline.Filled = true
+    WindowOutline.Position = Vector2.new(MiddleX, MiddleY)
+    table.insert(Drawings, WindowOutline)
 
-	-- chase ring + breathing aura + logo tile
-	local RingCY = 50;
-	local RingBase = Instance.new("Frame");
-	RingBase.AnchorPoint = Vector2.new(0.5, 0.5);
-	RingBase.Position = UDim2.new(0.5, 0, 0, RingCY);
-	RingBase.Size = UDim2.fromOffset(62, 62);
-	RingBase.BackgroundTransparency = 1; RingBase.BorderSizePixel = 0; RingBase.ZIndex = 3; RingBase.Parent = Root;
-	local RingBaseCorner = Instance.new("UICorner"); RingBaseCorner.CornerRadius = UDim.new(1, 0); RingBaseCorner.Parent = RingBase;
-	local RingBaseStroke = Instance.new("UIStroke"); RingBaseStroke.Color = Color3.fromHex("393939");
-	RingBaseStroke.Thickness = 2; RingBaseStroke.Transparency = 0.2; RingBaseStroke.Parent = RingBase;
 
-	local Ring = Instance.new("Frame");
-	Ring.AnchorPoint = Vector2.new(0.5, 0.5);
-	Ring.Position = UDim2.new(0.5, 0, 0, RingCY);
-	Ring.Size = UDim2.fromOffset(62, 62);
-	Ring.BackgroundTransparency = 1; Ring.BorderSizePixel = 0; Ring.ZIndex = 4; Ring.Parent = Root;
-	local RingCorner = Instance.new("UICorner"); RingCorner.CornerRadius = UDim.new(1, 0); RingCorner.Parent = Ring;
-	local RingStroke = Instance.new("UIStroke"); RingStroke.Color = Accent; RingStroke.Thickness = 3; RingStroke.Parent = Ring;
-	local RingGrad = Instance.new("UIGradient");
-	RingGrad.Transparency = NewNumberSequence({
-		NewNumberSequenceKeypoint(0,    0);
-		NewNumberSequenceKeypoint(0.30, 0.05);
-		NewNumberSequenceKeypoint(0.75, 1);
-		NewNumberSequenceKeypoint(1,    1);
-	});
-	RingGrad.Parent = RingStroke;
+    local WindowOutlineBorder = Drawing.new("Square")
+    WindowOutlineBorder.Size = Vector2.new(WindowOutline.Size.X - 2, WindowOutline.Size.Y - 2)
+    WindowOutlineBorder.Position = Vector2.new(WindowOutline.Position.X + 1, WindowOutline.Position.Y + 1)
+    WindowOutlineBorder.Thickness = 0
+    WindowOutlineBorder.Color = Color3.fromHex("#7885f5")
+    WindowOutlineBorder.Visible = true
+    WindowOutlineBorder.Filled = true
+    table.insert(Drawings, WindowOutlineBorder)
 
-	-- soft accent aura behind the ring (oval faked with crossed gradients)
-	local Aura = Instance.new("Frame");
-	Aura.AnchorPoint = Vector2.new(0.5, 0.5);
-	Aura.Position = UDim2.new(0.5, 0, 0, RingCY);
-	Aura.Size = UDim2.fromOffset(180, 126);
-	Aura.BackgroundColor3 = Accent; Aura.BackgroundTransparency = 0.6;
-	Aura.BorderSizePixel = 0; Aura.ZIndex = 2; Aura.Parent = Root;
-	local AuraV = Instance.new("UIGradient");
-	AuraV.Rotation = 90;
-	AuraV.Transparency = NewNumberSequence({
-		NewNumberSequenceKeypoint(0,   1);
-		NewNumberSequenceKeypoint(0.5, 0.55);
-		NewNumberSequenceKeypoint(1,   1);
-	});
-	AuraV.Parent = Aura;
-	local AuraInner = Instance.new("Frame");
-	AuraInner.Size = UDim2.new(1, 0, 1, 0);
-	AuraInner.BackgroundColor3 = Accent; AuraInner.BackgroundTransparency = 0;
-	AuraInner.BorderSizePixel = 0; AuraInner.ZIndex = 2; AuraInner.Parent = Aura;
-	local AuraH = Instance.new("UIGradient");
-	AuraH.Transparency = NewNumberSequence({
-		NewNumberSequenceKeypoint(0,   1);
-		NewNumberSequenceKeypoint(0.5, 0.55);
-		NewNumberSequenceKeypoint(1,   1);
-	});
-	AuraH.Parent = AuraInner;
-	local AuraScale = Instance.new("UIScale"); AuraScale.Parent = Aura;
 
-	-- icon tile: accent gradient rounded tile; logo image on top, monogram fallback
-	local Tile = Instance.new("Frame");
-	Tile.AnchorPoint = Vector2.new(0.5, 0.5);
-	Tile.Position = UDim2.new(0.5, 0, 0, RingCY);
-	Tile.Size = UDim2.fromOffset(40, 40);
-	Tile.BackgroundColor3 = Accent; Tile.BorderSizePixel = 0; Tile.ZIndex = 5; Tile.Parent = Root;
-	local TileCorner = Instance.new("UICorner"); TileCorner.CornerRadius = UDim.new(0, 9); TileCorner.Parent = Tile;
-	local TileGrad = Instance.new("UIGradient"); TileGrad.Rotation = 90;
-	TileGrad.Color = NewColorSequence({
-		NewColorSequenceKeypoint(0, LightenAccent(Accent));
-		NewColorSequenceKeypoint(1, Accent:Lerp(Color3.fromHex("000000"), 0.28));
-	});
-	TileGrad.Parent = Tile;
-	local TileStroke = Instance.new("UIStroke"); TileStroke.Color = Color3.fromHex("FFFFFF");
-	TileStroke.Thickness = 1; TileStroke.Transparency = 0.82; TileStroke.Parent = Tile;
+    local WindowFrame = Drawing.new("Square")
+    WindowFrame.Size = Vector2.new(WindowOutlineBorder.Size.X - 2, WindowOutlineBorder.Size.Y - 2)
+    WindowFrame.Position = Vector2.new(WindowOutlineBorder.Position.X + 1, WindowOutlineBorder.Position.Y + 1)
+    WindowFrame.Thickness = 0
+    WindowFrame.Transparency = 1
+    WindowFrame.Color = Color3.fromHex("#191919")
+    WindowFrame.Visible = true
+    WindowFrame.Filled = true
+    table.insert(Drawings, WindowFrame)
 
-	local Icon = Instance.new("ImageLabel");
-	Icon.AnchorPoint = Vector2.new(0.5, 0.5);
-	Icon.Position = UDim2.new(0.5, 0, 0.5, 0);
-	Icon.Size = UDim2.fromOffset(26, 26);
-	Icon.BackgroundTransparency = 1; Icon.BorderSizePixel = 0; Icon.ScaleType = Enum.ScaleType.Fit;
-	Icon.ZIndex = 6; Icon.Parent = Tile;
 
-	local Mono = Instance.new("TextLabel");
-	Mono.AnchorPoint = Vector2.new(0.5, 0.5);
-	Mono.Position = UDim2.new(0.5, 0, 0.5, 0);
-	Mono.Size = UDim2.new(1, 0, 1, 0);
-	Mono.BackgroundTransparency = 1;
-	Mono.Text = string.upper(string.sub(tostring(Title or "C"), 1, 1));
-	Mono.TextColor3 = Color3.fromHex("FFFFFF"); Mono.TextSize = 19; Mono.Font = Enum.Font.GothamBold;
-	Mono.ZIndex = 6; Mono.Visible = false; Mono.Parent = Tile;
+    local WindowTitle = Drawing.new("Text")
+    WindowTitle.Font = Drawing.Fonts.Plex
+    WindowTitle.Size = 13
+    WindowTitle.Color = Color3.fromHex("#e8e8e8")
+    WindowTitle.Text = Title
+    WindowTitle.Position = Vector2.new(WindowFrame.Position.X + (WindowFrame.Size.X / 2), WindowOutlineBorder.Position.Y + 8)
+    WindowTitle.Visible = true
+    WindowTitle.Center = true
+    WindowTitle.Outline = false
+    table.insert(Drawings, WindowTitle)
 
-	-- logo: local file -> re-download -> monogram fallback (icon is never empty).
-	-- PNG magic check: a dead link yields an HTML error page; caching that as
-	-- "logo2.png" used to silently break every logo in the UI.
-	local LogoAsset = (function()
-		local function IsPng(D)
-			return type(D) == "string" and #D > 100 and string.sub(D, 1, 4) == "\137PNG";
-		end;
-		if isfile("Hydrogen/logo2.png") then
-			local OkR, Data = pcall(readfile, "Hydrogen/logo2.png");
-			if OkR and IsPng(Data) then
-				local Ok, A = pcall(getcustomasset, "Hydrogen/logo2.png");
-				if Ok and A then return A; end;
-			else
-				pcall(delfile, "Hydrogen/logo2.png"); -- corrupted cache (HTML error page etc.)
-			end;
-		end;
-		local OkD, Data = pcall(function()
-			return game:HttpGet("https://www.dropbox.com/scl/fi/r3qlj26fdg2bniukw6ut9/logo2.png?rlkey=5kq8p4mpdm4e5laqd7havyfsn&st=od93q1vk&dl=1");
-		end);
-		if OkD and IsPng(Data) then
-			pcall(function()
-				if not isfolder("Hydrogen") then makefolder("Hydrogen") end;
-				writefile("Hydrogen/logo2.png", Data);
-			end);
-			local Ok, A = pcall(getcustomasset, "Hydrogen/logo2.png");
-			if Ok and A then return A; end;
-		end;
-		return nil;
-	end)();
-	if LogoAsset then
-		Icon.Image = LogoAsset;
-	else
-		Icon.Visible = false; Mono.Visible = true;
-	end;
 
-	-- texts
-	local TitleLbl = Instance.new("TextLabel");
-	TitleLbl.Position = UDim2.new(0, 0, 0, 88); TitleLbl.Size = UDim2.new(1, 0, 0, 16);
-	TitleLbl.BackgroundTransparency = 1; TitleLbl.Text = tostring(Title or "Loading");
-	TitleLbl.TextColor3 = Color3.fromHex("FFFFFF"); TitleLbl.TextSize = 15;
-	TitleLbl.Font = Enum.Font.GothamBold; TitleLbl.ZIndex = 3; TitleLbl.Parent = Root;
+    local WindowText = Drawing.new("Text")
+    WindowText.Font = Drawing.Fonts.Plex
+    WindowText.Size = 13
+    WindowText.Color = Color3.fromHex("#e8e8e8")
+    WindowText.Visible = true
+    WindowText.Center = true
+    WindowText.Outline = false
+    table.insert(Drawings, WindowText)
 
-	local MsgLbl = Instance.new("TextLabel");
-	MsgLbl.Position = UDim2.new(0, 0, 0, 108); MsgLbl.Size = UDim2.new(1, 0, 0, 14);
-	MsgLbl.BackgroundTransparency = 1; MsgLbl.Text = "";
-	MsgLbl.TextColor3 = Accent; MsgLbl.TextSize = 13;
-	MsgLbl.Font = Enum.Font.Gotham; MsgLbl.ZIndex = 3; MsgLbl.Parent = Root;
 
-	local PctLbl = Instance.new("TextLabel");
-	PctLbl.AnchorPoint = Vector2.new(1, 0);
-	PctLbl.Position = UDim2.new(1, -30, 0, PH - 50); PctLbl.Size = UDim2.new(0, 60, 0, 11);
-	PctLbl.BackgroundTransparency = 1; PctLbl.Text = "0%";
-	PctLbl.TextColor3 = LightenAccent(Accent); PctLbl.TextSize = 11;
-	PctLbl.Font = Enum.Font.Gotham; PctLbl.TextXAlignment = Enum.TextXAlignment.Right;
-	PctLbl.ZIndex = 3; PctLbl.Parent = Root;
+    local SliderInline = Drawing.new("Square")
+    SliderInline.Size = Vector2.new(205, 15)
+    SliderInline.Color = Color3.fromHex("#323232")
+    SliderInline.Transparency = 0.75
+    SliderInline.Thickness = 0
+    SliderInline.Visible = true
+    SliderInline.Filled = true
+    table.insert(Drawings, SliderInline)
 
-	-- capsule progress track + gradient fill + sheen
-	local Track = Instance.new("Frame");
-	Track.AnchorPoint = Vector2.new(0.5, 1);
-	Track.Position = UDim2.new(0.5, 0, 1, -20); Track.Size = UDim2.new(0, 260, 0, 11);
-	Track.BackgroundColor3 = Color3.fromHex("101010"); Track.BorderSizePixel = 0;
-	Track.ClipsDescendants = true; Track.ZIndex = 3; Track.Parent = Root;
-	local TrackCorner = Instance.new("UICorner"); TrackCorner.CornerRadius = UDim.new(1, 0); TrackCorner.Parent = Track;
-	local TrackStroke = Instance.new("UIStroke"); TrackStroke.Color = Color3.fromHex("393939");
-	TrackStroke.Thickness = 1; TrackStroke.Transparency = 0.2; TrackStroke.Parent = Track;
 
-	local Fill = Instance.new("Frame");
-	Fill.Size = UDim2.new(0, 0, 1, 0);
-	Fill.BackgroundColor3 = Color3.fromHex("FFFFFF"); Fill.BorderSizePixel = 0;
-	Fill.ClipsDescendants = true; Fill.ZIndex = 4; Fill.Parent = Track;
-	local FillCorner = Instance.new("UICorner"); FillCorner.CornerRadius = UDim.new(1, 0); FillCorner.Parent = Fill;
-	local FillGrad = Instance.new("UIGradient");
-	FillGrad.Color = NewColorSequence({
-		NewColorSequenceKeypoint(0,   Accent);
-		NewColorSequenceKeypoint(0.5, LightenAccent(Accent));
-		NewColorSequenceKeypoint(1,   Accent);
-	});
-	FillGrad.Parent = Fill;
-	local Sheen = Instance.new("Frame");
-	Sheen.Size = UDim2.new(0, 42, 1, 0); Sheen.Position = UDim2.new(-0.2, -20, 0, 0);
-	Sheen.BackgroundColor3 = Color3.fromHex("FFFFFF"); Sheen.BorderSizePixel = 0;
-	Sheen.ZIndex = 5; Sheen.Parent = Fill;
-	local SheenGrad = Instance.new("UIGradient");
-	SheenGrad.Transparency = NewNumberSequence({
-		NewNumberSequenceKeypoint(0,   1);
-		NewNumberSequenceKeypoint(0.5, 0.55);
-		NewNumberSequenceKeypoint(1,   1);
-	});
-	SheenGrad.Parent = Sheen;
+    local SliderOutline = Drawing.new("Square")
+    SliderOutline.Size = Vector2.new(SliderInline.Size.X - 2, SliderInline.Size.Y - 2)
+    SliderOutline.Color = Color3.fromHex("#000005")
+    SliderOutline.Transparency = 0.5
+    SliderOutline.Thickness = 0
+    SliderOutline.Visible = true
+    SliderOutline.Filled = true
+    table.insert(Drawings, SliderOutline)
 
-	-- motion state, one driver
-	local Closing, Cleaned = false, false;
-	local TargetP, ShownP = 0, 0;
-	local Spin, HaloClock, SheenClock = 0, 0, 0;
-	local MsgA, MsgOut, PendingMsg = 1, false, nil;
+    local SliderFrame = Drawing.new("Square")
+    SliderFrame.Color = Color3.fromHex("#7885f5")
+    SliderFrame.Transparency = 0.75
+    SliderFrame.Thickness = 0
+    SliderFrame.Visible = true
+    SliderFrame.Filled = true
+    table.insert(Drawings, SliderFrame)
 
-	local Conn;
-	Conn = RunService.RenderStepped:Connect(function(DT)
-		if Cleaned then return end;
-		Spin = (Spin + DT * 140) % 360;
-		RingGrad.Rotation = Spin;
-		HaloClock = HaloClock + DT;
-		AuraScale.Scale = 1.04 + 0.06 * math.sin(HaloClock * 2.4);
-		Aura.BackgroundTransparency = 0.55 + 0.08 * math.sin(HaloClock * 2.4 + 1.2);
-		local A7 = 1 - math.exp(-DT * 7);
-		if math.abs(TargetP - ShownP) > 0.0005 then
-			ShownP = ShownP + (TargetP - ShownP) * A7;
-		else
-			ShownP = TargetP;
-		end;
-		Fill.Size = UDim2.new(ShownP, 0, 1, 0);
-		PctLbl.Text = tostring(math.floor(ShownP * 100 + 0.5)) .. "%";
-		SheenClock = (SheenClock + DT * 0.55) % 1;
-		Sheen.Position = UDim2.new(SheenClock * 1.4 - 0.2, -20, 0, 0);
-		if MsgOut then
-			MsgA = MsgA - DT / 0.10;
-			if MsgA <= 0 then
-				MsgA = 0;
-				MsgLbl.Text = PendingMsg or "";
-				PendingMsg = nil;
-				MsgOut = false;
-			end;
-		elseif MsgA < 1 then
-			MsgA = math.min(1, MsgA + DT / 0.16);
-		end;
-		MsgLbl.TextTransparency = 1 - MsgA;
-	end);
 
-	local Max = 2;
-	local function SetText(Val, Txt)
-		TargetP = math.clamp((tonumber(Val) or 0) / Max, 0, 1);
-		Txt = tostring(Txt or "");
-		if MsgLbl.Text == "" and not MsgOut then
-			MsgLbl.Text = Txt; -- first message: no cross-fade flicker
-		elseif Txt ~= MsgLbl.Text then
-			PendingMsg = Txt;
-			MsgOut = true;
-		end;
-	end;
-	local function Cleanup()
-		if Closing then return end;
-		Closing = true;
-		TweenService:Create(Dim, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { BackgroundTransparency = 1 }):Play();
-		TweenService:Create(Root, TweenInfo.new(0.32, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
-			GroupTransparency = 1; Position = UDim2.new(0.5, 0, 0.5, 8);
-		}):Play();
-		TweenService:Create(PopScale, TweenInfo.new(0.32, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Scale = 0.96 }):Play();
-		task.delay(0.38, function()
-			Cleaned = true;
-			Conn:Disconnect();
-			pcall(function() Gui:Destroy() end);
-		end);
-	end;
+    local MiddleIcon = Drawing.new("Image");
+    MiddleIcon.Size = Vector2.new(185, 185);
+    MiddleIcon.Rounding = 5;
+    MiddleIcon.Transparency = 1;
+    MiddleIcon.Visible = true;
+    -- [MOBILE PATCH] 只加了缓存校验：logo 缓存损坏/缺失时隐藏图标，不再报错或显示乱图
+    local OkLogo, LogoData = pcall(readfile, "Hydrogen/logo2.png");
+    if OkLogo and LogoData and string.sub(LogoData, 1, 4) == "\137PNG" then
+        MiddleIcon.Data = LogoData;
+    else
+        MiddleIcon.Visible = false;
+    end
+    table.insert(Drawings, MiddleIcon);
 
-	-- entrance: dim + fade/rise/pop
-	TweenService:Create(Dim, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 0.35 }):Play();
-	TweenService:Create(Root, TweenInfo.new(0.5, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-		GroupTransparency = 0; Position = UDim2.new(0.5, 0, 0.5, 0);
-	}):Play();
-	TweenService:Create(PopScale, TweenInfo.new(0.55, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Scale = 1 }):Play();
+    SliderInline.Position = Vector2.new(
+        WindowOutline.Position.X + (WindowOutline.Size.X / 2) - (SliderOutline.Size.X / 2),
+        (WindowOutline.Position.Y + WindowOutline.Size.Y) - 30
+    );
+    SliderOutline.Position = Vector2.new(SliderInline.Position.X + 1, SliderInline.Position.Y + 1);
+    SliderFrame.Position = Vector2.new(SliderInline.Position.X + 1, SliderInline.Position.Y + 1);
+    WindowText.Position = Vector2.new(WindowFrame.Position.X + (WindowFrame.Size.X / 2), SliderInline.Position.Y - 16);
+    MiddleIcon.Position = Vector2.new(
+        WindowOutline.Position.X + (WindowOutline.Size.X / 2) - (MiddleIcon.Size.X / 2),
+        WindowOutline.Position.Y + (WindowOutline.Size.Y / 2) - (MiddleIcon.Size.Y / 2) - 15
+    );
+    MiddleIcon.Transparency = 1;
 
-	SetText(0.3, "UI Initialization [ Downloading ]")
-	wait(0.2)
 
-	local function DownloadImage(Path, Url)
-		if isfile(Path) then
-			return readfile(Path)
-		else
-			local Data = game:HttpGet(Url)
-			writefile(Path, Data)
-			return Data
-		end
-	end
 
-	SetText(0.5, "Checking Assets")
-	local c = check()
-	if c == false then
-		SetText(1, "Asset Check Function Returned False.")
-		getgenv().finishedloader = false
-		getgenv().loadererror = true
-		wait(3.5)
-		SetText(1.1, "Hydrogen will exit now.")
-		wait(2.5)
-   		task.wait(1)
-    	Cleanup()
-    	return
-	end
+    local Max = 2
+    local function SetText(Val, Txt)
+        SliderFrame.Size = Vector2.new(
+            ((SliderInline.Size.X - 2) / (Max / math.clamp(Val, 0, Max))),
+            SliderInline.Size.Y - 2
+        )
+        WindowText.Text = Txt
+    end
+
+
+    SetText(0.3, "UI Initialization [ Downloading ]")
+    wait(0.2)
+
+    local function DownloadImage(Path, Url)
+        if isfile(Path) then
+            return readfile(Path)
+        else
+            local Data = game:HttpGet(Url)
+            writefile(Path, Data)
+            return Data
+        end
+    end
+
+
+    SetText(0.5, "Checking Assets")
+    local c = check()
+    if c == false then
+        SetText(1, "Asset Check Function Returned False.")
+        getgenv().finishedloader = false
+        getgenv().loadererror = true
+        wait(3.5)
+        SetText(1.1, "Hydrogen will exit now.")
+        wait(2.5)
+        task.wait(1)
+        for _, Drawing in ipairs(Drawings) do
+            Drawing:Remove()
+        end
+        return
+    end
     task.wait(0.5)
     SetText(1, "Checking Executor")
     task.wait(0.5)
     SetText(1.2, "Checking Game")
     task.wait(0.3)
-	SetText(1.45, "Checking Script")
+    SetText(1.45, "Checking Script")
     task.wait(0.2)
-	SetText(1.55, "[ Authenticating ]")
+    SetText(1.55, "[ Authenticating ]")
     task.wait(0.15)
     SetText(2, "Finished")
-	getgenv().finishedloader = true
+    getgenv().finishedloader = true
 
     task.wait(1.2)
-    Cleanup()
+    for _, Drawing in ipairs(Drawings) do
+        Drawing:Remove()
+    end
 end
 
 
@@ -7449,6 +7256,14 @@ ApplySettingsContents = function(self)
 			OnChanged = function(K) Library.MenuKeybind = K end;
 		});
 
+		-- [MOBILE PATCH] Unload：确认后销毁整个 UI（所有窗口/水印/悬浮按钮/加载面板），
+		-- 并触发 Library:OnUnload 注册的清理回调。等价于脚本里手动 Library:Unload()。
+		SecMenu:Button({
+			Name = "Unload"; Confirm = true;
+			Tooltip = "Destroy the whole UI (Library:Unload)";
+			Callback = function() Library:Unload() end;
+		});
+
 		local SecHud = self:Section({ Name = "HUD", Side = "Right" });
 		local WatermarkToggle = SecHud:Toggle({
 			Name     = "Watermark", Default = true;
@@ -7582,6 +7397,8 @@ ApplySettingsContents = function(self)
 			LoadTheme       = ActionLoadTheme;
 			DeleteTheme     = ActionDeleteTheme;
 			RefreshThemes   = ActionRefreshThemes;
+			-- [MOBILE PATCH] destroy the whole UI (same as the Unload button in the Menu section)
+			Unload = function() Library:Unload() end;
 		};
 		return Controls;
 end;
@@ -8920,8 +8737,21 @@ function Library:LoadConfig(Name)
 	return true;
 end;
 
+-- [MOBILE PATCH] OnUnload 回调（Linoria 同款）：卸载前触发，用于停掉脚本自己的循环
+Library.UnloadCallbacks = {};
+function Library:OnUnload(Fn)
+	if typeof(Fn) ~= "function" then return end;
+	table.insert(self.UnloadCallbacks, Fn);
+end;
+
 function Library:Unload()
 	self:Log("Unload requested");
+	self.Unloaded = true; -- [MOBILE PATCH]
+
+	for _, Fn in ipairs(self.UnloadCallbacks or {}) do -- [MOBILE PATCH] 先跑用户清理钩子
+		task.spawn(Fn);
+	end;
+
 	for _, Conn in self.Connections do
 		if Conn ~= nil then
 			Conn:Disconnect();
@@ -8934,6 +8764,17 @@ function Library:Unload()
 		Win.Gui:Destroy();
 	end;
 	self.CurrentlyOpen = nil;
+
+	-- [MOBILE PATCH] 销毁注册表里所有 ScreenGui（水印/按键列表/Preview/Playerlist/
+	-- 通知/加载面板等）。旧版只销毁主窗口，重执行时其余全部残留叠屏。
+	for _, G in ipairs(self._MobileRegistry or {}) do
+		pcall(function() if G and G.Parent then G:Destroy() end end);
+	end;
+	self._MobileRegistry = {};
+	if self.MobileMenuButton and self.MobileMenuButton.Gui then -- [MOBILE PATCH] 悬浮按钮不在注册表，单独销毁
+		pcall(function() self.MobileMenuButton.Gui:Destroy() end);
+		self.MobileMenuButton = nil;
+	end;
 
 	self.Flags = {};
 	self.Toggles = {};
