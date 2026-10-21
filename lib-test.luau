@@ -146,7 +146,7 @@ function Library:GetVersion()
 	return Library.Version or "Unknown"
 end
 
-local Logo = readfile("Hydrogen/logo2.png") or "will install"
+local Logo = select(2, pcall(readfile, "Hydrogen/logo2.png")) or "will install" -- [MOBILE PATCH] 缓存缺失不再报错
 
 print(Library:GetVersion())
 
@@ -252,7 +252,47 @@ local function check()
 	return true
 end
 
-function CreateLoader(Title, WindowSize)
+-- [MOBILE PATCH] 加载器 Logo 解析成原始图片字节（Drawing 的 Image.Data 只认字节，不认 asset 字符串）。
+-- Source：nil = 默认（SetLogo 过的全局 Logo > 库自带 Hydrogen/logo2.png）；false = 隐藏；
+-- 数字 / "rbxassetid://N" / "https?://..."（下载，校验 PNG/JPEG 魔数）/ 本地路径（readfile）。
+function ResolveLoaderImage(Source)
+    if Source == false then return nil end
+    local function ValidImage(D)
+        return type(D) == "string" and #D > 100
+            and (string.sub(D, 1, 4) == "\137PNG" or string.sub(D, 1, 2) == "\255\216")
+    end
+    if Source == nil then Source = Library._CustomLogo end
+    if Source == nil or Source == false then
+        if Source == false then return nil end
+        local Ok, D = pcall(readfile, "Hydrogen/logo2.png")
+        if Ok and ValidImage(D) then return D end
+        pcall(delfile, "Hydrogen/logo2.png") -- 坏缓存（死链存了 HTML 错误页）清掉
+        return nil
+    end
+    if typeof(Source) == "number" then Source = "rbxassetid://" .. tostring(Source) end
+    if typeof(Source) ~= "string" then return nil end
+    local Id = string.match(Source, "^rbxassetid://(%d+)$")
+    if Id then
+        local Ok, D = pcall(function()
+            return game:HttpGet("https://assetdelivery.roblox.com/v1/asset?id=" .. Id)
+        end)
+        if Ok and ValidImage(D) then return D end
+        return nil
+    end
+    if string.match(Source, "^https?://") then
+        local Ok, D = pcall(function() return game:HttpGet(Source) end)
+        if Ok and ValidImage(D) then return D end
+        return nil
+    end
+    if isfile and isfile(Source) then
+        local Ok, D = pcall(readfile, Source)
+        if Ok and ValidImage(D) then return D end
+    end
+    return nil
+end
+
+-- [MOBILE PATCH] 原版 Drawing 加载器抽成可复用组件：启动画面和 Library:CreateLoading 用的是同一个
+function BuildDrawingLoader(Title, WindowSize, LogoSrc)
     local Camera = Workspace.CurrentCamera
 
 
@@ -348,9 +388,9 @@ function CreateLoader(Title, WindowSize)
     MiddleIcon.Rounding = 5;
     MiddleIcon.Transparency = 1;
     MiddleIcon.Visible = true;
-    -- [MOBILE PATCH] 只加了缓存校验：logo 缓存损坏/缺失时隐藏图标，不再报错或显示乱图
-    local OkLogo, LogoData = pcall(readfile, "Hydrogen/logo2.png");
-    if OkLogo and LogoData and string.sub(LogoData, 1, 4) == "\137PNG" then
+    -- [MOBILE PATCH] 自定义 Logo（CreateLoading 传 Logo/Icon）+ 坏图校验：拿不到就隐藏，不报错不显示乱图
+    local LogoData = ResolveLoaderImage(LogoSrc);
+    if LogoData then
         MiddleIcon.Data = LogoData;
     else
         MiddleIcon.Visible = false;
@@ -373,13 +413,33 @@ function CreateLoader(Title, WindowSize)
 
 
     local Max = 2
-    local function SetText(Val, Txt)
+    local Loader = { _Max = Max }
+    local Destroyed = false
+    local CurVal  = 0
+    local CurText = ""
+    function Loader:Set(Val, Txt)
+        if Destroyed then return end
+        if Val ~= nil then CurVal = tonumber(Val) or 0 end
+        if Txt ~= nil then CurText = tostring(Txt) end
         SliderFrame.Size = Vector2.new(
-            ((SliderInline.Size.X - 2) / (Max / math.clamp(Val, 0, Max))),
+            ((SliderInline.Size.X - 2) / (Max / math.clamp(CurVal, 0, Max))),
             SliderInline.Size.Y - 2
         )
-        WindowText.Text = Txt
+        WindowText.Text = CurText
     end
+    function Loader:Destroy()
+        if Destroyed then return end
+        Destroyed = true
+        for _, D in ipairs(Drawings) do
+            pcall(function() D:Remove() end)
+        end
+    end
+    return Loader
+end
+
+function CreateLoader(Title, WindowSize)
+    local Loader = BuildDrawingLoader(Title, WindowSize)
+    local function SetText(Val, Txt) Loader:Set(Val, Txt) end
 
 
     SetText(0.3, "UI Initialization [ Downloading ]")
@@ -406,9 +466,7 @@ function CreateLoader(Title, WindowSize)
         SetText(1.1, "Hydrogen will exit now.")
         wait(2.5)
         task.wait(1)
-        for _, Drawing in ipairs(Drawings) do
-            Drawing:Remove()
-        end
+        Loader:Destroy()
         return
     end
     task.wait(0.5)
@@ -424,13 +482,15 @@ function CreateLoader(Title, WindowSize)
     getgenv().finishedloader = true
 
     task.wait(1.2)
-    for _, Drawing in ipairs(Drawings) do
-        Drawing:Remove()
-    end
+    Loader:Destroy()
 end
 
 
-CreateLoader("Hydrogen", Vector2.new(300, 300))
+-- [MOBILE PATCH] 启动不再自动弹加载动画——只有外部 Library:CreateLoading 调用时才出现。
+-- 资产/环境检查静默执行（Logo 缺失仍会尝试补下载），finishedloader / loadererror 标志行为不变。
+local _BootOk = check()
+getgenv().finishedloader = _BootOk
+if not _BootOk then getgenv().loadererror = true end
 end
 
 function Library:RegisterAccentGradient(Gradient)
@@ -8787,6 +8847,10 @@ function Library:Unload()
 		pcall(function() self.MobileMenuButton.Gui:Destroy() end);
 		self.MobileMenuButton = nil;
 	end;
+	for _, L in ipairs(self._ActiveLoaders or {}) do -- [MOBILE PATCH] Drawing 加载器不在注册表，单独销毁
+		pcall(function() L:Destroy() end);
+	end;
+	self._ActiveLoaders = {};
 
 	self.Flags = {};
 	self.Toggles = {};
@@ -11063,378 +11127,61 @@ do
 end;
 
 -- ════════════════════════════════════════════════════════════════════════════
--- [MOBILE PATCH] 外部可调用的加载动画（Obsidian CreateLoading 风格，高级动效版）
---   local Loading = Library:CreateLoading({ Title = "mspaint", Icon = 95816097006870, TotalSteps = 4 })
---   Loading:SetMessage("...") / Loading:SetDescription("...") / Loading:SetCurrentStep(1)
---   Loading:ShowSidebarPage(true); Loading.Sidebar:AddLabel("User: ...")
---   Loading:Continue()  -- 淡出并销毁（触发 Opts.Callback）
--- 动效：旋转追光环 + 图标呼吸光晕 / 进度条指数平滑 + 百分比 + 流光扫过 /
---       文案交叉淡入淡出 / 缩放+上浮入场 / 底部主题色内辉光 / 背景柔光压暗
+-- [MOBILE PATCH] 外部可调用的加载动画：直接复用原版 Drawing 加载器（和启动画面是同一个，
+-- 不是新建一套）。无侧栏，原生加载器只有一行状态文字。
+--   local Loading = Library:CreateLoading({ Title = "mspaint", TotalSteps = 4 })
+--   Logo/Icon 可选：数字 id / "rbxassetid://..." / 图片直链 / 本地路径，false = 隐藏图标；
+--   不写就用 Library:SetLogo 设置的全局 Logo，再退到库自带 Logo。
+--   Loading:SetMessage("...") / Loading:SetDescription("...")  -- 都是设置那行状态文字
+--   Loading:SetCurrentStep(1)   -- 进度条 = 当前步 / TotalSteps
+--   Loading:SetProgress(0.5)    -- 或者直接按 0-1 设进度
+--   Loading:Continue()          -- 销毁（触发 Opts.Callback）；Loading:Destroy() 直接销毁
 -- ════════════════════════════════════════════════════════════════════════════
 function Library:CreateLoading(Opts)
 	Opts = typeof(Opts) == "table" and Opts or {};
 	local TitleText  = tostring(Opts.Title or Opts.Name or "Loading");
 	local TotalSteps = math.max(1, math.floor(tonumber(Opts.TotalSteps) or 1));
-	local IconSrc = Opts.Icon;
-	if IconSrc == nil then IconSrc = Opts.Logo end;
-	if typeof(IconSrc) == "number" then IconSrc = "rbxassetid://" .. tostring(IconSrc) end;
 
-	local Gui = Library:CreateInstance("ScreenGui", {
-		Name           = "CoincideLoading";
-		Parent         = (gethui and gethui()) or CoreGui;
-		IgnoreGuiInset = true;
-		ResetOnSpawn   = false;
-		DisplayOrder   = 9999;
-		ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
-	});
+	local Cam = Workspace.CurrentCamera;
+	local Vp  = (Cam and Cam.ViewportSize) or Vector2.new(800, 600);
+	local W   = math.min(300, math.max(Vp.X - 24, 160)); -- [MOBILE PATCH] 窄屏不超出
+	local LogoSrc = Opts.Logo;
+	if LogoSrc == nil then LogoSrc = Opts.Icon end; -- [MOBILE PATCH] 自定义加载动画 Logo（数字 id / rbxassetid / 直链 / 本地路径，false = 隐藏；不写用全局 SetLogo 或库自带 Logo）
+	local Loader = BuildDrawingLoader(TitleText, Vector2.new(W, W), LogoSrc);
+	local Max = Loader._Max;
 
-	-- 背景柔光压暗
-	local Dim = Library:CreateInstance("Frame", {
-		Parent = Gui; Size = UDim2.new(1, 0, 1, 0);
-		BackgroundColor3 = Color3.fromHex("000000"); BackgroundTransparency = 1;
-		BorderSizePixel = 0;
-	});
+	local Destroyed = false;
+	local Loading = {};
 
-	local BaseW, SideW, H = 320, 132, 178;
-	local Root = Library:CreateInstance("CanvasGroup", {
-		Name              = "Root";
-		Parent            = Gui;
-		AnchorPoint       = Vector2.new(0.5, 0.5);
-		Position          = UDim2.new(0.5, 0, 0.5, 16);
-		Size              = UDim2.fromOffset(BaseW, H);
-		BackgroundColor3  = Color3.fromHex("FFFFFF");
-		BorderSizePixel   = 0;
-		GroupTransparency = 1;
-	});
-	Library:CreateInstance("UICorner", { Parent = Root; CornerRadius = UDim.new(0, 10) });
-	Library:CreateInstance("UIGradient", {
-		Parent = Root; Rotation = 90;
-		Color = NewColorSequence({
-			NewColorSequenceKeypoint(0, Color3.fromHex("1E1E1E")); -- 与主窗口同 palette
-			NewColorSequenceKeypoint(1, Color3.fromHex("161616"));
-		});
-	});
-	Library:CreateInstance("UIStroke", {
-		Parent = Root; Color = Color3.fromHex("000105"); Thickness = 1;
-		ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
-	});
-	local CLInner = Library:CreateInstance("Frame", { -- 窗口式内灰描边，清晰可见
-		Parent = Root; Position = UDim2.new(0, 1, 0, 1); Size = UDim2.new(1, -2, 1, -2);
-		BackgroundTransparency = 1; BorderSizePixel = 0; ZIndex = 9;
-	});
-	Library:CreateInstance("UICorner", { Parent = CLInner; CornerRadius = UDim.new(0, 9) });
-	Library:CreateInstance("UIStroke", {
-		Parent = CLInner; Color = Color3.fromHex("393939"); Thickness = 1;
-		ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
-	});
-	-- 底部主题色内辉光
-	local BottomGlow = Library:CreateInstance("Frame", {
-		Parent = Root; AnchorPoint = Vector2.new(0.5, 1); ZIndex = 1;
-		Position = UDim2.new(0.5, 0, 1, 0); Size = UDim2.new(1, 0, 0, 26);
-		BackgroundColor3 = Color3.fromHex("FFFFFF"); BorderSizePixel = 0;
-	});
-	local BgGlowGrad = Library:CreateInstance("UIGradient", {
-		Parent = BottomGlow; Rotation = 90;
-		Transparency = NewNumberSequence({
-			NewNumberSequenceKeypoint(0, 1);
-			NewNumberSequenceKeypoint(1, 0.85);
-		});
-	});
-	Library:RegisterAccentGradient(BgGlowGrad);
-	-- 顶部高光线：中间主题色、两端淡出
-	local TopLine = Library:CreateInstance("Frame", {
-		Parent = Root; Position = UDim2.new(0, 12, 0, 0); Size = UDim2.new(1, -24, 0, 1);
-		BackgroundColor3 = Color3.fromHex("FFFFFF"); BorderSizePixel = 0; ZIndex = 10;
-	});
-	local TopGrad = Library:CreateInstance("UIGradient", {
-		Parent = TopLine; Rotation = 0;
-		Transparency = NewNumberSequence({
-			NewNumberSequenceKeypoint(0,   1);
-			NewNumberSequenceKeypoint(0.3, 0.15);
-			NewNumberSequenceKeypoint(0.7, 0.15);
-			NewNumberSequenceKeypoint(1,   1);
-		});
-	});
-	Library:RegisterAccentGradient(TopGrad);
+	if Opts.Message ~= nil then Loader:Set(0, Opts.Message) end;
+	if Opts.Description ~= nil then Loader:Set(nil, Opts.Description) end;
 
-	local PopScale = Library:CreateInstance("UIScale", { Parent = Root; Scale = 0.94 });
-
-	-- 主区固定宽度锚左：侧栏展开时 Root 向右加宽，主区内容不动
-	local Main = Library:CreateInstance("Frame", {
-		Parent = Root; Size = UDim2.new(0, BaseW, 1, 0); ZIndex = 2;
-		BackgroundTransparency = 1; BorderSizePixel = 0;
-	});
-
-	-- 旋转追光环（底环 + 渐变弧段旋转）
-	local RingBase = Library:CreateInstance("Frame", {
-		Parent = Main; AnchorPoint = Vector2.new(0.5, 0);
-		Position = UDim2.new(0.5, 0, 0, 18); Size = UDim2.fromOffset(52, 52);
-		BackgroundTransparency = 1; BorderSizePixel = 0;
-	});
-	Library:CreateInstance("UICorner", { Parent = RingBase; CornerRadius = UDim.new(1, 0) });
-	Library:CreateInstance("UIStroke", {
-		Parent = RingBase; Color = Color3.fromHex("393939"); Thickness = 2; Transparency = 0.2;
-	});
-	local Ring = Library:CreateInstance("Frame", {
-		Parent = Main; AnchorPoint = Vector2.new(0.5, 0);
-		Position = UDim2.new(0.5, 0, 0, 18); Size = UDim2.fromOffset(52, 52);
-		BackgroundTransparency = 1; BorderSizePixel = 0;
-	});
-	Library:CreateInstance("UICorner", { Parent = Ring; CornerRadius = UDim.new(1, 0) });
-	local RingStroke = Library:CreateInstance("UIStroke", {
-		Parent = Ring; Color = Library.Accent; Thickness = 3;
-	});
-	Library:RegisterAccent(RingStroke, "Color");
-	local RingGrad = Library:CreateInstance("UIGradient", {
-		Parent = RingStroke;
-		Transparency = NewNumberSequence({
-			NewNumberSequenceKeypoint(0,    0);
-			NewNumberSequenceKeypoint(0.30, 0.05);
-			NewNumberSequenceKeypoint(0.75, 1);
-			NewNumberSequenceKeypoint(1,    1);
-		});
-	});
-
-	-- 图标底座（主题色渐变圆角块）+ Logo；Logo 缺失时显示标题首字母，绝不空白
-	local Tile = Library:CreateInstance("Frame", {
-		Parent = Ring; AnchorPoint = Vector2.new(0.5, 0.5); ZIndex = 1;
-		Position = UDim2.new(0.5, 0, 0.5, 0); Size = UDim2.fromOffset(36, 36);
-		BackgroundColor3 = Library.Accent; BorderSizePixel = 0;
-	});
-	Library:CreateInstance("UICorner", { Parent = Tile; CornerRadius = UDim.new(0, 9) });
-	Library:RegisterAccent(Tile);
-	Library:CreateInstance("UIGradient", {
-		Parent = Tile; Rotation = 90;
-		Color = NewColorSequence({
-			NewColorSequenceKeypoint(0, Color3.fromHex("FFFFFF"));
-			NewColorSequenceKeypoint(1, Color3.fromHex("8A8A8A"));
-		});
-	});
-	Library:CreateInstance("UIStroke", {
-		Parent = Tile; Color = Color3.fromHex("FFFFFF"); Thickness = 1; Transparency = 0.82;
-	});
-	local TileScale = Library:CreateInstance("UIScale", { Parent = Tile; Scale = 1 });
-	local IconImg = Library:CreateInstance("ImageLabel", {
-		Parent = Tile; AnchorPoint = Vector2.new(0.5, 0.5); ZIndex = 2;
-		Position = UDim2.new(0.5, 0, 0.5, 0); Size = UDim2.fromOffset(24, 24);
-		BackgroundTransparency = 1; BorderSizePixel = 0; ScaleType = Enum.ScaleType.Fit;
-	});
-	local MonoL = Library:CreateInstance("TextLabel", {
-		Parent = Tile; AnchorPoint = Vector2.new(0.5, 0.5); ZIndex = 2;
-		Position = UDim2.new(0.5, 0, 0.5, 0); Size = UDim2.new(1, 0, 1, 0);
-		BackgroundTransparency = 1; Text = string.upper(string.sub(TitleText, 1, 1));
-		TextColor3 = Color3.fromHex("FFFFFF"); TextSize = 17; Font = Enum.Font.GothamBold;
-		Visible = false;
-	});
-	local IconAsset = (IconSrc ~= false) and Library:_ResolveLogo(IconSrc) or nil;
-	if IconAsset then
-		IconImg.Image = IconAsset;
-	else
-		IconImg.Visible = false; MonoL.Visible = true;
-	end;
-
-	local TitleLbl = Library:CreateInstance("TextLabel", {
-		Parent = Main; Position = UDim2.new(0, 0, 0, 78); Size = UDim2.new(1, 0, 0, 15);
-		BackgroundTransparency = 1; Text = TitleText; TextColor3 = Color3.fromHex("FFFFFF");
-		TextSize = 14; TextXAlignment = Enum.TextXAlignment.Center;
-	});
-	local MsgLbl = Library:CreateInstance("TextLabel", {
-		Parent = Main; Position = UDim2.new(0, 0, 0, 97); Size = UDim2.new(1, 0, 0, 13);
-		BackgroundTransparency = 1; Text = tostring(Opts.Message or ""); TextColor3 = Library.Accent;
-		TextSize = 12; TextXAlignment = Enum.TextXAlignment.Center;
-	});
-	Library:RegisterAccent(MsgLbl, "TextColor3");
-	local DescLbl = Library:CreateInstance("TextLabel", {
-		Parent = Main; Position = UDim2.new(0, 0, 0, 114); Size = UDim2.new(1, 0, 0, 13);
-		BackgroundTransparency = 1; Text = tostring(Opts.Description or ""); TextColor3 = Color3.fromHex("8C8F99");
-		TextSize = 12; TextXAlignment = Enum.TextXAlignment.Center;
-	});
-	local StepLbl = Library:CreateInstance("TextLabel", {
-		Parent = Main; Position = UDim2.new(0, 28, 1, -46); Size = UDim2.new(0.5, -28, 0, 11);
-		BackgroundTransparency = 1; Text = "0 / " .. tostring(TotalSteps); TextColor3 = Color3.fromHex("6E7280");
-		TextSize = 11; TextXAlignment = Enum.TextXAlignment.Left;
-	});
-	local PctLbl = Library:CreateInstance("TextLabel", {
-		Parent = Main; Position = UDim2.new(0.5, 0, 1, -46); Size = UDim2.new(0.5, -28, 0, 11);
-		BackgroundTransparency = 1; Text = "0%"; TextColor3 = Color3.fromHex("8C8F99");
-		TextSize = 11; TextXAlignment = Enum.TextXAlignment.Right;
-	});
-	if ProggyCleanFont then
-		TitleLbl.FontFace = ProggyCleanFont; MsgLbl.FontFace  = ProggyCleanFont;
-		DescLbl.FontFace  = ProggyCleanFont; StepLbl.FontFace = ProggyCleanFont;
-		PctLbl.FontFace   = ProggyCleanFont;
-	end;
-
-	-- 进度条：圆角轨道 + 渐变填充 + 流光
-	local Track = Library:CreateInstance("Frame", {
-		Parent = Main; AnchorPoint = Vector2.new(0.5, 1);
-		Position = UDim2.new(0.5, 0, 1, -20); Size = UDim2.new(1, -56, 0, 10);
-		BackgroundColor3 = Color3.fromHex("101010"); BorderSizePixel = 0; ClipsDescendants = true;
-	});
-	Library:CreateInstance("UICorner", { Parent = Track; CornerRadius = UDim.new(1, 0) });
-	Library:CreateInstance("UIStroke", {
-		Parent = Track; Color = Color3.fromHex("393939"); Thickness = 1; Transparency = 0.2;
-	});
-	local Fill = Library:CreateInstance("Frame", {
-		Parent = Track; Position = UDim2.new(0, 0, 0, 0); Size = UDim2.new(0, 0, 1, 0);
-		BackgroundColor3 = Color3.fromHex("FFFFFF"); BorderSizePixel = 0; ClipsDescendants = true;
-	});
-	Library:CreateInstance("UICorner", { Parent = Fill; CornerRadius = UDim.new(1, 0) });
-	Library:RegisterAccentGradient(Library:CreateInstance("UIGradient", { Parent = Fill; Rotation = 0 }));
-	local Sheen = Library:CreateInstance("Frame", {
-		Parent = Fill; Size = UDim2.new(0, 46, 1, 0); Position = UDim2.new(-0.2, -20, 0, 0);
-		BackgroundColor3 = Color3.fromHex("FFFFFF"); BorderSizePixel = 0;
-	});
-	Library:CreateInstance("UIGradient", {
-		Parent = Sheen; Rotation = 0;
-		Transparency = NewNumberSequence({
-			NewNumberSequenceKeypoint(0,   1);
-			NewNumberSequenceKeypoint(0.5, 0.55);
-			NewNumberSequenceKeypoint(1,   1);
-		});
-	});
-
-	-- 侧栏（CanvasGroup 方便整体淡入）
-	local SidebarFrame = Library:CreateInstance("CanvasGroup", {
-		Parent = Root; AnchorPoint = Vector2.new(1, 0); ZIndex = 3;
-		Position = UDim2.new(1, 0, 0, 0); Size = UDim2.new(0, SideW, 1, 0);
-		BackgroundColor3 = Color3.fromHex("151515"); BorderSizePixel = 0;
-		Visible = false; GroupTransparency = 1;
-	});
-	Library:CreateInstance("Frame", { -- 左侧分隔线
-		Parent = SidebarFrame; Size = UDim2.new(0, 1, 1, 0);
-		BackgroundColor3 = Color3.fromHex("393939"); BorderSizePixel = 0;
-	});
-	local SideBody = Library:CreateInstance("Frame", {
-		Parent = SidebarFrame; Position = UDim2.new(0, 12, 0, 12); Size = UDim2.new(1, -22, 1, -24);
-		BackgroundTransparency = 1; BorderSizePixel = 0;
-	});
-	Library:CreateInstance("UIListLayout", {
-		Parent = SideBody; FillDirection = Enum.FillDirection.Vertical;
-		SortOrder = Enum.SortOrder.LayoutOrder; Padding = UDim.new(0, 6);
-	});
-
-	local Loading = { Gui = Gui, Root = Root };
-	local CurrentStep    = 0;
-	local SidebarShown   = false;
-	local Destroyed      = false;
-	local TargetProgress = 0;
-	local ShownProgress  = 0;
-	local SpinAngle      = 0;
-	local HaloClock      = 0;
-	local SheenClock     = 0;
-
-	-- 单 RenderStepped 驱动：追光环旋转 / 光晕呼吸 / 进度指数平滑 / 流光
-	local Conn = RunService.RenderStepped:Connect(function(DT)
-		SpinAngle = (SpinAngle + DT * 140) % 360;
-		RingGrad.Rotation = SpinAngle;
-		HaloClock = HaloClock + DT;
-		TileScale.Scale = 1.03 + 0.03 * math.sin(HaloClock * 2.4); -- 图标底座轻微呼吸
-		local A = 1 - math.exp(-DT * 7);
-		if math.abs(TargetProgress - ShownProgress) > 0.0005 then
-			ShownProgress = ShownProgress + (TargetProgress - ShownProgress) * A;
-		else
-			ShownProgress = TargetProgress;
-		end;
-		Fill.Size = UDim2.new(ShownProgress, 0, 1, 0);
-		PctLbl.Text = tostring(math.floor(ShownProgress * 100 + 0.5)) .. "%";
-		SheenClock = (SheenClock + DT * 0.55) % 1;
-		Sheen.Position = UDim2.new(SheenClock * 1.4 - 0.2, -20, 0, 0);
-	end);
-
-	-- 文案交叉淡入淡出
-	local function SwapText(Lbl, NewText)
-		NewText = tostring(NewText);
-		if Lbl.Text == NewText then return end;
-		local Out = Library:Tween(Lbl, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { TextTransparency = 1 });
-		Out:Play();
-		Out.Completed:Once(function()
-			if Destroyed then return end;
-			Lbl.Text = NewText;
-			Library:Tween(Lbl, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { TextTransparency = 0 }):Play();
-		end);
-	end;
-
-	function Loading:SetMessage(T) SwapText(MsgLbl, T) end;
-	function Loading:SetDescription(T) SwapText(DescLbl, T) end;
+	function Loading:SetMessage(T) Loader:Set(nil, T) end;
+	function Loading:SetDescription(T) Loader:Set(nil, T) end; -- 原生加载器只有一行字：同 SetMessage
 	function Loading:SetCurrentStep(N)
-		CurrentStep = math.clamp(math.floor(tonumber(N) or 0), 0, TotalSteps);
-		StepLbl.Text = tostring(CurrentStep) .. " / " .. tostring(TotalSteps);
-		TargetProgress = CurrentStep / TotalSteps;
+		local S = math.clamp(math.floor(tonumber(N) or 0), 0, TotalSteps);
+		Loader:Set((S / TotalSteps) * Max);
 	end;
-	function Loading:SetProgress(P) -- 0-1 直接设进度，不动步数文字
-		TargetProgress = math.clamp(tonumber(P) or 0, 0, 1);
+	function Loading:SetProgress(P) -- 0-1 直接设进度
+		Loader:Set(math.clamp(tonumber(P) or 0, 0, 1) * Max);
 	end;
-	function Loading:ShowSidebarPage(B)
-		B = B == true;
-		if B == SidebarShown then return end;
-		SidebarShown = B;
-		if B then
-			SidebarFrame.Visible = true;
-			Library:Tween(Root, TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-				Size = UDim2.fromOffset(BaseW + SideW, H);
-			}):Play();
-			Library:Tween(SidebarFrame, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-				GroupTransparency = 0;
-			}):Play();
-		else
-			Library:Tween(Root, TweenInfo.new(0.35, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-				Size = UDim2.fromOffset(BaseW, H);
-			}):Play();
-			Library:Tween(SidebarFrame, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
-				GroupTransparency = 1;
-			}):Play();
-			task.delay(0.25, function() if not SidebarShown then SidebarFrame.Visible = false end end);
-		end;
-	end;
-	Loading.Sidebar = {
-		AddLabel = function(_, T)
-			local Row = Library:CreateInstance("Frame", {
-				Parent = SideBody; Size = UDim2.new(1, 0, 0, 14);
-				BackgroundTransparency = 1; BorderSizePixel = 0;
-			});
-			local Dot = Library:CreateInstance("Frame", {
-				Parent = Row; AnchorPoint = Vector2.new(0, 0.5);
-				Position = UDim2.new(0, 1, 0.5, 0); Size = UDim2.fromOffset(4, 4);
-				BackgroundColor3 = Library.Accent; BorderSizePixel = 0;
-			});
-			Library:CreateInstance("UICorner", { Parent = Dot; CornerRadius = UDim.new(1, 0) });
-			Library:RegisterAccent(Dot);
-			local L = Library:CreateInstance("TextLabel", {
-				Parent = Row; Position = UDim2.new(0, 11, 0, 0); Size = UDim2.new(1, -11, 1, 0);
-				BackgroundTransparency = 1; Text = tostring(T); TextColor3 = Color3.fromHex("B8BEC8");
-				TextSize = 12; TextXAlignment = Enum.TextXAlignment.Left;
-				TextTruncate = Enum.TextTruncate.AtEnd;
-			});
-			if ProggyCleanFont then L.FontFace = ProggyCleanFont end;
-			return { SetText = function(_, T2) L.Text = tostring(T2) end };
-		end;
-	};
+	function Loading:ShowSidebarPage(_) end; -- 原生加载器没有侧栏：兼容参考写法的 no-op
+	Loading.Sidebar = { AddLabel = function() end }; -- 同上，no-op
 	function Loading:Destroy()
 		if Destroyed then return end;
 		Destroyed = true;
-		Conn:Disconnect();
-		Gui:Destroy();
+		Loader:Destroy();
 	end;
 	function Loading:Continue()
 		if Destroyed then return end;
 		Destroyed = true;
-		Conn:Disconnect();
 		if typeof(Opts.Callback) == "function" then task.spawn(Opts.Callback) end;
-		Library:Tween(Dim, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { BackgroundTransparency = 1 }):Play();
-		Library:Tween(Root, TweenInfo.new(0.32, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
-			GroupTransparency = 1; Position = UDim2.new(0.5, 0, 0.5, 10);
-		}):Play();
-		Library:Tween(PopScale, TweenInfo.new(0.32, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Scale = 0.96 }):Play();
-		task.delay(0.36, function() if Gui.Parent then Gui:Destroy() end end);
+		Loader:Destroy();
 	end;
 
-	-- 入场：压暗背景 + 淡入上浮 + 轻微回弹放大
-	Library:Tween(Dim, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { BackgroundTransparency = 0.42 }):Play();
-	Library:Tween(Root, TweenInfo.new(0.5, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
-		GroupTransparency = 0; Position = UDim2.new(0.5, 0, 0.5, 0);
-	}):Play();
-	Library:Tween(PopScale, TweenInfo.new(0.55, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), { Scale = 1 }):Play();
+	-- [MOBILE PATCH] Library:Unload() 时一并清理
+	Library._ActiveLoaders = Library._ActiveLoaders or {};
+	table.insert(Library._ActiveLoaders, Loading);
 
 	return Loading;
 end;
