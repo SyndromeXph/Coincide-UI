@@ -1003,6 +1003,11 @@ function Library:_MakeSatelliteBindable(Obj)
 	function Obj:SyncWithTab(Window, TabName)
 		if not (Window and Window._Tabs) then return end;
 		self._BoundTab = string.lower(tostring(TabName or ""));
+		-- [MOBILE PATCH] 注册进窗口的卫星表：Tab:SetActive 统一刷新（AddTab 直建也能覆盖到）
+		Window._Satellites = Window._Satellites or {};
+		local Registered = false;
+		for _, S in ipairs(Window._Satellites) do if S == self then Registered = true; break end; end;
+		if not Registered then table.insert(Window._Satellites, self) end;
 		local function HookTab(T)
 			if T._SatHooked then return end;
 			T._SatHooked = true;
@@ -5904,6 +5909,13 @@ RegisterGradLerp(GradEntry)
 		function TabRef:SetActive(State)
 			OrigSetActive(self, State);
 			RefreshSeparators();
+			-- [MOBILE PATCH] 切页立刻刷新绑定 Tab 的卫星窗口（Preview/Playerlist/Log 等）。
+			-- 之前只有菜单开关才刷新，导致切到对应页不显示、切走不消失。
+			if WinRef._Satellites then
+				for _, S in ipairs(WinRef._Satellites) do
+					if S._RefreshBinding then task.defer(S._RefreshBinding, S) end;
+				end;
+			end;
 		end;
 
 		return TabRef;
