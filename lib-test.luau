@@ -253,7 +253,7 @@ local function check()
 end
 
 -- [MOBILE PATCH] 加载器 Logo 解析成原始图片字节（Drawing 的 Image.Data 只认字节，不认 asset 字符串）。
--- Source：nil = 默认（SetLogo 过的全局 Logo > 库自带 Hydrogen/logo2.png）；false = 隐藏；
+-- Source：nil = 默认（库自带 Hydrogen/logo2.png）；false = 隐藏；
 -- 数字 / "rbxassetid://N" / "https?://..."（下载，校验 PNG/JPEG 魔数）/ 本地路径（readfile）。
 function ResolveLoaderImage(Source)
     if Source == false then return nil end
@@ -291,8 +291,9 @@ function ResolveLoaderImage(Source)
     return nil
 end
 
--- [MOBILE PATCH] 原版 Drawing 加载器抽成可复用组件：启动画面和 Library:CreateLoading 用的是同一个
-function BuildDrawingLoader(Title, WindowSize, LogoSrc)
+-- [MOBILE PATCH] 原版 Drawing 加载动画 + 整体淡入淡出（渲染帧驱动 smoothstep 缓动，流畅平滑）。
+-- 自定义 Logo：CreateLoader(Title, Size, LogoSrc)，LogoSrc 同 ResolveLoaderImage。
+function CreateLoader(Title, WindowSize, LogoSrc)
     local Camera = Workspace.CurrentCamera
 
 
@@ -388,7 +389,7 @@ function BuildDrawingLoader(Title, WindowSize, LogoSrc)
     MiddleIcon.Rounding = 5;
     MiddleIcon.Transparency = 1;
     MiddleIcon.Visible = true;
-    -- [MOBILE PATCH] 自定义 Logo（CreateLoading 传 Logo/Icon）+ 坏图校验：拿不到就隐藏，不报错不显示乱图
+    -- [MOBILE PATCH] 自定义 Logo + 坏图校验：拿不到就隐藏，不报错不显示乱图
     local LogoData = ResolveLoaderImage(LogoSrc);
     if LogoData then
         MiddleIcon.Data = LogoData;
@@ -412,35 +413,37 @@ function BuildDrawingLoader(Title, WindowSize, LogoSrc)
 
 
 
-    local Max = 2
-    local Loader = { _Max = Max }
-    local Destroyed = false
-    local CurVal  = 0
-    local CurText = ""
-    function Loader:Set(Val, Txt)
-        if Destroyed then return end
-        if Val ~= nil then CurVal = tonumber(Val) or 0 end
-        if Txt ~= nil then CurText = tostring(Txt) end
-        SliderFrame.Size = Vector2.new(
-            ((SliderInline.Size.X - 2) / (Max / math.clamp(CurVal, 0, Max))),
-            SliderInline.Size.Y - 2
-        )
-        WindowText.Text = CurText
+    -- [MOBILE PATCH] 淡入淡出：记录每个元素的目标透明度，渲染帧驱动 smoothstep 缓动整体插值
+    local FadeTargets = {}
+    for _, D in ipairs(Drawings) do
+        FadeTargets[D] = D.Transparency
+        D.Transparency = 0
     end
-    function Loader:Destroy()
-        if Destroyed then return end
-        Destroyed = true
-        for _, D in ipairs(Drawings) do
-            pcall(function() D:Remove() end)
+    local RS = game:GetService("RunService")
+    local function Fade(From, To, Duration)
+        local Start = os.clock()
+        while true do
+            local T = math.min((os.clock() - Start) / Duration, 1)
+            local E = T * T * (3 - 2 * T) -- smoothstep：起止速度为 0，中间最顺
+            local A = From + (To - From) * E
+            for D, Target in pairs(FadeTargets) do
+                pcall(function() D.Transparency = Target * A end)
+            end
+            if T >= 1 then break end
+            RS.RenderStepped:Wait()
         end
     end
-    return Loader
-end
 
-function CreateLoader(Title, WindowSize)
-    local Loader = BuildDrawingLoader(Title, WindowSize)
-    local function SetText(Val, Txt) Loader:Set(Val, Txt) end
+    local Max = 2
+    local function SetText(Val, Txt)
+        SliderFrame.Size = Vector2.new(
+            ((SliderInline.Size.X - 2) / (Max / math.clamp(Val, 0, Max))),
+            SliderInline.Size.Y - 2
+        )
+        WindowText.Text = Txt
+    end
 
+    Fade(0, 1, 0.35) -- [MOBILE PATCH] 淡入
 
     SetText(0.3, "UI Initialization [ Downloading ]")
     wait(0.2)
@@ -465,8 +468,11 @@ function CreateLoader(Title, WindowSize)
         wait(3.5)
         SetText(1.1, "Hydrogen will exit now.")
         wait(2.5)
+        Fade(1, 0, 0.3) -- [MOBILE PATCH] 淡出
         task.wait(1)
-        Loader:Destroy()
+        for _, Drawing in ipairs(Drawings) do
+            Drawing:Remove()
+        end
         return
     end
     task.wait(0.5)
@@ -482,15 +488,21 @@ function CreateLoader(Title, WindowSize)
     getgenv().finishedloader = true
 
     task.wait(1.2)
-    Loader:Destroy()
+    Fade(1, 0, 0.3) -- [MOBILE PATCH] 淡出
+    for _, Drawing in ipairs(Drawings) do
+        Drawing:Remove()
+    end
 end
 
-
--- [MOBILE PATCH] 启动不再自动弹加载动画——只有外部 Library:CreateLoading 调用时才出现。
--- 资产/环境检查静默执行（Logo 缺失仍会尝试补下载），finishedloader / loadererror 标志行为不变。
-local _BootOk = check()
-getgenv().finishedloader = _BootOk
-if not _BootOk then getgenv().loadererror = true end
+-- [MOBILE PATCH] 外部开关：loadstring 之前写 getgenv().CoincideLoader = false 即关闭启动加载动画
+-- （检查仍静默执行，finishedloader / loadererror 标志行为不变）；默认开启。
+if getgenv().CoincideLoader == false then
+    local _BootOk = check()
+    getgenv().finishedloader = _BootOk
+    if not _BootOk then getgenv().loadererror = true end
+else
+    CreateLoader("Hydrogen", Vector2.new(300, 300))
+end
 end
 
 function Library:RegisterAccentGradient(Gradient)
@@ -8847,11 +8859,6 @@ function Library:Unload()
 		pcall(function() self.MobileMenuButton.Gui:Destroy() end);
 		self.MobileMenuButton = nil;
 	end;
-	for _, L in ipairs(self._ActiveLoaders or {}) do -- [MOBILE PATCH] Drawing 加载器不在注册表，单独销毁
-		pcall(function() L:Destroy() end);
-	end;
-	self._ActiveLoaders = {};
-
 	self.Flags = {};
 	self.Toggles = {};
 	self.Options = {};
@@ -11124,66 +11131,6 @@ do
 		end;
 		self._LogoInstances = Alive;
 	end;
-end;
-
--- ════════════════════════════════════════════════════════════════════════════
--- [MOBILE PATCH] 外部可调用的加载动画：直接复用原版 Drawing 加载器（和启动画面是同一个，
--- 不是新建一套）。无侧栏，原生加载器只有一行状态文字。
---   local Loading = Library:CreateLoading({ Title = "mspaint", TotalSteps = 4 })
---   Logo/Icon 可选：数字 id / "rbxassetid://..." / 图片直链 / 本地路径，false = 隐藏图标；
---   不写就用 Library:SetLogo 设置的全局 Logo，再退到库自带 Logo。
---   Loading:SetMessage("...") / Loading:SetDescription("...")  -- 都是设置那行状态文字
---   Loading:SetCurrentStep(1)   -- 进度条 = 当前步 / TotalSteps
---   Loading:SetProgress(0.5)    -- 或者直接按 0-1 设进度
---   Loading:Continue()          -- 销毁（触发 Opts.Callback）；Loading:Destroy() 直接销毁
--- ════════════════════════════════════════════════════════════════════════════
-function Library:CreateLoading(Opts)
-	Opts = typeof(Opts) == "table" and Opts or {};
-	local TitleText  = tostring(Opts.Title or Opts.Name or "Loading");
-	local TotalSteps = math.max(1, math.floor(tonumber(Opts.TotalSteps) or 1));
-
-	local Cam = Workspace.CurrentCamera;
-	local Vp  = (Cam and Cam.ViewportSize) or Vector2.new(800, 600);
-	local W   = math.min(300, math.max(Vp.X - 24, 160)); -- [MOBILE PATCH] 窄屏不超出
-	local LogoSrc = Opts.Logo;
-	if LogoSrc == nil then LogoSrc = Opts.Icon end; -- [MOBILE PATCH] 自定义加载动画 Logo（数字 id / rbxassetid / 直链 / 本地路径，false = 隐藏；不写用全局 SetLogo 或库自带 Logo）
-	local Loader = BuildDrawingLoader(TitleText, Vector2.new(W, W), LogoSrc);
-	local Max = Loader._Max;
-
-	local Destroyed = false;
-	local Loading = {};
-
-	if Opts.Message ~= nil then Loader:Set(0, Opts.Message) end;
-	if Opts.Description ~= nil then Loader:Set(nil, Opts.Description) end;
-
-	function Loading:SetMessage(T) Loader:Set(nil, T) end;
-	function Loading:SetDescription(T) Loader:Set(nil, T) end; -- 原生加载器只有一行字：同 SetMessage
-	function Loading:SetCurrentStep(N)
-		local S = math.clamp(math.floor(tonumber(N) or 0), 0, TotalSteps);
-		Loader:Set((S / TotalSteps) * Max);
-	end;
-	function Loading:SetProgress(P) -- 0-1 直接设进度
-		Loader:Set(math.clamp(tonumber(P) or 0, 0, 1) * Max);
-	end;
-	function Loading:ShowSidebarPage(_) end; -- 原生加载器没有侧栏：兼容参考写法的 no-op
-	Loading.Sidebar = { AddLabel = function() end }; -- 同上，no-op
-	function Loading:Destroy()
-		if Destroyed then return end;
-		Destroyed = true;
-		Loader:Destroy();
-	end;
-	function Loading:Continue()
-		if Destroyed then return end;
-		Destroyed = true;
-		if typeof(Opts.Callback) == "function" then task.spawn(Opts.Callback) end;
-		Loader:Destroy();
-	end;
-
-	-- [MOBILE PATCH] Library:Unload() 时一并清理
-	Library._ActiveLoaders = Library._ActiveLoaders or {};
-	table.insert(Library._ActiveLoaders, Loading);
-
-	return Loading;
 end;
 
 Library:Log("Initialized Hydrogen UI Lib")
