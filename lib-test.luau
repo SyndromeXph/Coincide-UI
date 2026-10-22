@@ -291,8 +291,8 @@ function ResolveLoaderImage(Source)
     return nil
 end
 
--- [MOBILE PATCH] 原版 Drawing 加载动画（共享构建器）+ 整体淡入淡出（渲染帧驱动 smoothstep 缓动）。
--- 进度条渲染帧连续插值 + 条头高光。LogoSrc 同 ResolveLoaderImage；启动画面和外部 CreateLoading 用的都是它。
+-- [MOBILE PATCH] 原版 Drawing 加载动画（全库唯一一套）+ 整体淡入淡出（渲染帧驱动 smoothstep 缓动）。
+-- 进度条渲染帧连续插值 + 条头高光。LogoSrc 同 ResolveLoaderImage；由 Library:CreateLoading 外部调用。
 function BuildDrawingLoader(Title, WindowSize, LogoSrc)
     local Camera = Workspace.CurrentCamera
 
@@ -479,63 +479,11 @@ function BuildDrawingLoader(Title, WindowSize, LogoSrc)
     return Loader
 end
 
--- [MOBILE PATCH] 原版启动加载流程（逐字保留原版检查序列），构建走共享构建器
-function CreateLoader(Title, WindowSize)
-    local Loader = BuildDrawingLoader(Title, WindowSize)
-    local function SetText(Val, Txt) Loader:Set(Val, Txt) end
-
-    SetText(0.3, "UI Initialization [ Downloading ]")
-    wait(0.2)
-
-    local function DownloadImage(Path, Url)
-        if isfile(Path) then
-            return readfile(Path)
-        else
-            local Data = game:HttpGet(Url)
-            writefile(Path, Data)
-            return Data
-        end
-    end
-
-
-    SetText(0.5, "Checking Assets")
-    local c = check()
-    if c == false then
-        SetText(1, "Asset Check Function Returned False.")
-        getgenv().finishedloader = false
-        getgenv().loadererror = true
-        wait(3.5)
-        SetText(1.1, "Hydrogen will exit now.")
-        wait(2.5)
-        Loader:Destroy()
-        task.wait(1)
-        return
-    end
-    task.wait(0.5)
-    SetText(1, "Checking Executor")
-    task.wait(0.5)
-    SetText(1.2, "Checking Game")
-    task.wait(0.3)
-    SetText(1.45, "Checking Script")
-    task.wait(0.2)
-    SetText(1.55, "[ Authenticating ]")
-    task.wait(0.15)
-    SetText(2, "Finished")
-    getgenv().finishedloader = true
-
-    task.wait(1.2)
-    Loader:Destroy()
-end
-
--- [MOBILE PATCH] 外部开关：loadstring 之前写 getgenv().CoincideLoader = false 即关闭启动加载动画
--- （检查仍静默执行，finishedloader / loadererror 标志行为不变）；默认开启。
-if getgenv().CoincideLoader == false then
-    local _BootOk = check()
-    getgenv().finishedloader = _BootOk
-    if not _BootOk then getgenv().loadererror = true end
-else
-    CreateLoader("Hydrogen", Vector2.new(300, 300))
-end
+-- [MOBILE PATCH] 没有启动画面：加载动画只在外部 Library:CreateLoading 调用时出现（全库仅此一套）。
+-- 资产/环境检查静默执行（Logo 缺失仍会尝试补下载），finishedloader / loadererror 标志行为不变。
+local _BootOk = check()
+getgenv().finishedloader = _BootOk
+if not _BootOk then getgenv().loadererror = true end
 end
 
 function Library:RegisterAccentGradient(Gradient)
