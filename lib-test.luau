@@ -383,6 +383,15 @@ function CreateLoader(Title, WindowSize, LogoSrc)
     SliderFrame.Filled = true
     table.insert(Drawings, SliderFrame)
 
+    -- [MOBILE PATCH] 进度条高光头：浅色亮边跟着条头走，更有质感
+    local SliderTip = Drawing.new("Square")
+    SliderTip.Color = Color3.fromHex("#b9c1ff")
+    SliderTip.Transparency = 0.45
+    SliderTip.Thickness = 0
+    SliderTip.Visible = true
+    SliderTip.Filled = true
+    table.insert(Drawings, SliderTip)
+
 
     local MiddleIcon = Drawing.new("Image");
     MiddleIcon.Size = Vector2.new(185, 185);
@@ -435,11 +444,24 @@ function CreateLoader(Title, WindowSize, LogoSrc)
     end
 
     local Max = 2
+    -- [MOBILE PATCH] 进度条平滑化：渲染帧连续插值逼近目标宽度（帧率无关），不再跳变
+    local BarFull = SliderInline.Size.X - 2
+    local CurW, TargetW = 0, 0
+    local SlideDone = false
+    task.spawn(function()
+        while not SlideDone do
+            local Dt = RS.RenderStepped:Wait()
+            CurW = CurW + (TargetW - CurW) * math.min(Dt * 10, 1)
+            if math.abs(TargetW - CurW) < 0.4 then CurW = TargetW end
+            local W = math.max(CurW, 0)
+            SliderFrame.Size = Vector2.new(W, SliderInline.Size.Y - 2)
+            SliderTip.Visible = W > 3
+            SliderTip.Size = Vector2.new(math.min(W, 2.5), SliderInline.Size.Y - 2)
+            SliderTip.Position = Vector2.new(SliderInline.Position.X + 1 + math.max(W - 2.5, 0), SliderInline.Position.Y + 1)
+        end
+    end)
     local function SetText(Val, Txt)
-        SliderFrame.Size = Vector2.new(
-            ((SliderInline.Size.X - 2) / (Max / math.clamp(Val, 0, Max))),
-            SliderInline.Size.Y - 2
-        )
+        TargetW = BarFull * (math.clamp(Val, 0, Max) / Max)
         WindowText.Text = Txt
     end
 
@@ -470,6 +492,7 @@ function CreateLoader(Title, WindowSize, LogoSrc)
         wait(2.5)
         Fade(1, 0, 0.3) -- [MOBILE PATCH] 淡出
         task.wait(1)
+        SlideDone = true -- [MOBILE PATCH] 停掉进度条插值循环
         for _, Drawing in ipairs(Drawings) do
             Drawing:Remove()
         end
@@ -489,6 +512,7 @@ function CreateLoader(Title, WindowSize, LogoSrc)
 
     task.wait(1.2)
     Fade(1, 0, 0.3) -- [MOBILE PATCH] 淡出
+    SlideDone = true -- [MOBILE PATCH] 停掉进度条插值循环
     for _, Drawing in ipairs(Drawings) do
         Drawing:Remove()
     end
@@ -6040,7 +6064,14 @@ RegisterGradLerp(GradEntry)
 		-- window from one RenderStepped connection (no 100+ tween burst = no frame spike).
 		if self._ActiveFade then self._ActiveFade:Disconnect(); self._ActiveFade = nil end;
 		if not self.Visible then
-			self._FadeOriginals = Library:_RefreshFadeMap(self._FadeOriginals, CaptureOriginals());
+			-- [MOBILE PATCH] 没有进行中的淡入淡出时，直接采用实时值——否则旧映射会把
+			-- "上一个激活 Tab" 的高亮透明度冻结成"原始值"，重开菜单时和新激活 Tab 一起亮。
+			local NewMap = CaptureOriginals();
+			if self._FadeClean or not self._FadeOriginals then
+				self._FadeOriginals = NewMap;
+			else
+				self._FadeOriginals = Library:_RefreshFadeMap(self._FadeOriginals, NewMap);
+			end;
 		elseif not self._FadeOriginals then
 			self._FadeOriginals = CaptureOriginals();
 		end;
@@ -6051,14 +6082,19 @@ RegisterGradLerp(GradEntry)
 			Library:Tween(AnimScale, TweenInfo.new(0.3, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
 				Scale = 1;
 			}):Play();
-			self._ActiveFade = Library:_FadeGroup(self._FadeOriginals, "in", 0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.Out);
+			self._FadeClean = false; -- [MOBILE PATCH] 淡入进行中：期间捕获的透明度不可信
+			self._ActiveFade = Library:_FadeGroup(self._FadeOriginals, "in", 0.24, Enum.EasingStyle.Quint, Enum.EasingDirection.Out, function()
+				self._FadeClean = true; -- [MOBILE PATCH] 淡入完成，实时值恢复可信
+			end);
 		else
 			-- [MOBILE PATCH] matching zoom-out while fading (Sine Out: fast start, gentle end)
 			Library:Tween(AnimScale, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
 				Scale = 0.965;
 			}):Play();
+			self._FadeClean = false; -- [MOBILE PATCH]
 			self._ActiveFade = Library:_FadeGroup(self._FadeOriginals, "out", 0.2, Enum.EasingStyle.Sine, Enum.EasingDirection.Out, function()
 				if not self.Visible then Gui.Enabled = false end;
+				self._FadeClean = true; -- [MOBILE PATCH]
 			end);
 		end;
 	end;
@@ -6087,11 +6123,15 @@ function Library:KeybindList(Opts)
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
 	});
 
+	-- [MOBILE PATCH] 移动端默认与 Preview 同位置（右上角停靠，可拖动）；PC 不变
+	local SatAnchor, SatPos = Vector2.new(1, 0), UDim2.new(1, -10, 0, 210);
+	if IsMobilePlatform then SatPos = UDim2.new(1, -8, 0, 38) end;
+
 	local Frame = self:CreateInstance("Frame", {
 		Name             = "Keybinds";
 		Parent           = Gui;
-		AnchorPoint      = Vector2.new(1, 0);
-		Position         = UDim2.new(1, -10, 0, 210);
+		AnchorPoint      = SatAnchor;
+		Position         = SatPos;
 		Size             = UDim2.new(0, Width, 0, 0);
 		AutomaticSize    = Enum.AutomaticSize.Y;
 		BackgroundColor3 = Color3.fromHex("FFFFFF");
@@ -8394,11 +8434,15 @@ function Library:LogWindow(Opts)
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
 	});
 
+	-- [MOBILE PATCH] 移动端默认与 Preview 同位置（右上角停靠，可拖动）；PC 不变
+	local SatPos = UDim2.fromOffset(0, 0);
+	if IsMobilePlatform then SatPos = UDim2.new(1, -8, 0, 38) end;
+
 	local Outer = self:CreateInstance("Frame", {
 		Name             = "Outer";
 		Parent           = Gui;
 		AnchorPoint      = Vector2.new(1, 0);
-		Position         = UDim2.fromOffset(0, 0);
+		Position         = SatPos;
 		Size             = UDim2.fromOffset(Width, Height);
 		BackgroundColor3 = Color3.fromHex("FFFFFF");
 		BorderSizePixel  = 0;
@@ -8879,11 +8923,15 @@ function Library:VisorChecker(Opts)
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
 	});
 
+-- [MOBILE PATCH] 移动端默认与 Preview 同位置（右上角停靠，可拖动）；PC 不变
+local SatAnchor, SatPos = Vector2.new(0, 0.5), UDim2.new(0, 10, 0.5, 0);
+if IsMobilePlatform then SatAnchor, SatPos = Vector2.new(1, 0), UDim2.new(1, -8, 0, 38) end;
+
 local Outer = self:CreateInstance("Frame", {
 	Name             = "Outer";
 	Parent           = Gui;
-	AnchorPoint      = Vector2.new(0, 0.5);
-	Position         = UDim2.new(0, 10, 0.5, 0);
+	AnchorPoint      = SatAnchor;
+	Position         = SatPos;
 	Size             = UDim2.fromOffset(Width, Height);
 	BackgroundColor3 = Color3.fromHex("FFFFFF");
 	BorderSizePixel  = 0;
@@ -9168,11 +9216,15 @@ function Library:TargetUI(Opts)
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
 	});
 
+	-- [MOBILE PATCH] 移动端默认与 Preview 同位置（右上角停靠，可拖动）；PC 不变
+	local SatAnchor, SatPos = Vector2.new(0.5, 0), UDim2.new(0.5, 0, 0, 12);
+	if IsMobilePlatform then SatAnchor, SatPos = Vector2.new(1, 0), UDim2.new(1, -8, 0, 38) end;
+
 	local Outer = self:CreateInstance("Frame", {
 		Name             = "Outer";
 		Parent           = Gui;
-		AnchorPoint      = Vector2.new(0.5, 0);
-		Position         = UDim2.new(0.5, 0, 0, 12);
+		AnchorPoint      = SatAnchor;
+		Position         = SatPos;
 		Size             = UDim2.fromOffset(Width, Height);
 		BackgroundColor3 = Color3.fromHex("FFFFFF");
 		BorderSizePixel  = 0;
@@ -9676,11 +9728,15 @@ function Library:InvViewer(Opts)
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling;
 	});
 
+	-- [MOBILE PATCH] 移动端默认与 Preview 同位置（右上角停靠，可拖动）；PC 不变
+	local SatPos = UDim2.new(1, -14, 0, 14);
+	if IsMobilePlatform then SatPos = UDim2.new(1, -8, 0, 38) end;
+
 	local Outer = self:CreateInstance("Frame", {
 		Name             = "Outer";
 		Parent           = Gui;
 		AnchorPoint      = Vector2.new(1, 0);
-		Position         = UDim2.new(1, -14, 0, 14);
+		Position         = SatPos;
 		Size             = UDim2.fromOffset(Width, MinHeight);
 		AutomaticSize    = Enum.AutomaticSize.Y;
 		BackgroundColor3 = Color3.fromHex("FFFFFF");
