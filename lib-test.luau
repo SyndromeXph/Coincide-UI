@@ -6585,10 +6585,22 @@ function Library:Notify(Text, Time, Color)
     local InInfo = TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
     local OutInfo = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In);
 
-    TweenService:Create(Outer, InInfo, {
-        Position          = UDim2.new(0, 0, 0, 0);
-        GroupTransparency = 0;
-    }):Play();
+    -- [MOBILE PATCH] 先量好宽度并把 Wrapper 定格成固定宽 + 裁剪，再滑入：
+    -- 否则 AutomaticSize.XY 会把 +60 偏移算进自身宽度，右侧通知瞬间满宽、滑动画完全被吃掉。
+    task.defer(function()
+        if not (Wrapper.Parent and Outer.Parent) then return end;
+        local W = Outer.AbsoluteSize.X;
+        if W and W > 0 then
+            Wrapper.AutomaticSize    = Enum.AutomaticSize.Y;
+            Wrapper.Size             = UDim2.new(0, W, 0, 0);
+            Wrapper.ClipsDescendants = true;
+        end;
+        Outer.Position = UDim2.new(0, SlideX, 0, 0);
+        TweenService:Create(Outer, InInfo, {
+            Position          = UDim2.new(0, 0, 0, 0);
+            GroupTransparency = 0;
+        }):Play();
+    end);
 
     task.spawn(function()
         task.wait(0.1); -- Biraz bekle, notification tam yerleşsin
