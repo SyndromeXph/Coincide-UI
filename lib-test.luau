@@ -6405,6 +6405,29 @@ local Logo = self:CreateInstance("ImageLabel", {
 	return Obj;
 end;
 
+-- [MOBILE PATCH] 通知位置：TopRight（默认）/ TopLeft，Settings 下拉框可切换
+Library._NotifyPosition = "TopRight";
+function Library:_ApplyNotifyPosition()
+	local Stack = self._NotifyStack;
+	if not Stack then return end;
+	local Right = self._NotifyPosition == "TopRight";
+	Stack.AnchorPoint = Right and Vector2.new(1, 0) or Vector2.new(0, 0);
+	Stack.Position    = Right and UDim2.new(1, -10, 0, 10) or UDim2.new(0, 10, 0, 10);
+	local Layout = Stack:FindFirstChildOfClass("UIListLayout");
+	if Layout then
+		Layout.HorizontalAlignment = Right and Enum.HorizontalAlignment.Right or Enum.HorizontalAlignment.Left;
+	end;
+end;
+function Library:SetNotifyPosition(Pos)
+	Pos = tostring(Pos or "");
+	if Pos == "Top Left" or Pos == "TopLeft" or Pos == "Left" or Pos == "左上角" then
+		self._NotifyPosition = "TopLeft";
+	else
+		self._NotifyPosition = "TopRight";
+	end;
+	self:_ApplyNotifyPosition();
+end;
+
 function Library:Notify(Text, Time, Color)
     Text = tostring(Text or "");
     Time = tonumber(Time) or 3;
@@ -6439,9 +6462,11 @@ function Library:Notify(Text, Time, Color)
         self._NotifyGui   = Gui;
         self._NotifyStack = Stack;
         self._NotifyOrder = 0;
+        self:_ApplyNotifyPosition(); -- [MOBILE PATCH] 按当前设置摆到左上/右上
     end;
 
     self._NotifyOrder = self._NotifyOrder + 1;
+    local SlideX = (self._NotifyPosition == "TopRight") and 60 or -60; -- [MOBILE PATCH] 从所在一侧滑入
 
     -- Notification Wrapper (ana taşıyıcı)
     local Wrapper = self:CreateInstance("Frame", {
@@ -6460,7 +6485,7 @@ function Library:Notify(Text, Time, Color)
         Name              = "Notification";
         Parent            = Wrapper;
         AnchorPoint       = Vector2.new(0, 0);
-        Position          = UDim2.new(0, -60, 0, 0); -- Soldan kayarak gelme
+        Position          = UDim2.new(0, SlideX, 0, 0); -- [MOBILE PATCH] 从所在一侧滑入
         Size              = UDim2.new(0, 0, 0, 0);
         AutomaticSize     = Enum.AutomaticSize.XY;
         BackgroundColor3  = Color3.fromHex("000000");
@@ -6579,7 +6604,7 @@ function Library:Notify(Text, Time, Color)
     task.delay(Time, function()
         if not Wrapper.Parent then return end;
         TweenService:Create(Outer, OutInfo, {
-            Position          = UDim2.new(0, -60, 0, 0);
+            Position          = UDim2.new(0, SlideX, 0, 0); -- [MOBILE PATCH] 向所在一侧滑出
             GroupTransparency = 1;
         }):Play();
         task.delay(OutInfo.Time, function()
@@ -7272,6 +7297,12 @@ ApplySettingsContents = function(self)
 		});
 
 		local SecMenu = self:Section({ Name = "Menu", Side = "Left" });
+		SecMenu:Dropdown({
+			Name    = "Notification Position"; Flag = "NotifyPosition";
+			Options = { "Top Right", "Top Left" };
+			Default = "Top Right";
+			Callback = function(V) Library:SetNotifyPosition(V) end; -- [MOBILE PATCH] 通知位置：右上角(默认)/左上角
+		});
 		SecMenu:Dropdown({
 			Name    = "Easing Style"; Flag = "MenuEaseStyle";
 			Options = { "Linear", "Cubic", "Quad", "Quart", "Quint", "Sine", "Exponential", "Circular", "Back", "Elastic", "Bounce" };
