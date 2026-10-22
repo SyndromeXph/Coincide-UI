@@ -1392,6 +1392,10 @@ function Library:AddGlowingV2(frame,color,transparency)
 		glow.Transparency = transparency;
 		glow.Parent = frame;
 		glow.Enabled = true;
+		-- [MOBILE PATCH] accent 色辉光登记进 AccentParts：换主题色时 SetAccent 会一并更新
+		if color == Library.Accent then
+			table.insert(Library.AccentParts, { Inst = glow, Prop = "Color" });
+		end;
 	end);
 end
 
@@ -10719,7 +10723,7 @@ do
 		local UserCb = typeof(Opts.Callback) == "function" and Opts.Callback or nil;
 		local Cb = function(C, A)
 			CProxy.Value = C; CProxy.Transparency = 1 - A;
-			if UserCb then UserCb(C) end;
+			if UserCb then UserCb(C, A) end; -- [MOBILE PATCH] 第二参数回传 Alpha，对齐原版 Callback(C, A)
 			FireCbs(CProxy._Cbs, C);
 		end;
 		return CProxy, Tr, Default, Cb;
