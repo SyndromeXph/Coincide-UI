@@ -1931,6 +1931,7 @@ local function BuildSection(Host, SecOpts)
 		BoxRef.AddTab = BoxRef.Tab; -- Obsidian 写法：Box:AddTab("...")
 		return BoxRef;
 	end;
+	SecRef.AddTabbox = SecRef.Tabbox; -- [MOBILE PATCH] Obsidian 写法：Groupbox:AddTabbox()
 
 	function SecRef:Toggle(Opts)
 		Opts = typeof(Opts) == "table" and Opts or {};
