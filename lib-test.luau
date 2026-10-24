@@ -422,6 +422,14 @@ function BuildDrawingLoader(Title, WindowSize, LogoSrc)
 
 
 
+    -- [MOBILE PATCH] 加载器配色跟随主题色（Library:SetAccent 时同步更新，正在显示也会变）
+    local function ApplyAccent(C)
+        WindowOutlineBorder.Color = C;
+        SliderFrame.Color = C;
+        SliderTip.Color = C:Lerp(Color3.fromRGB(255, 255, 255), 0.35);
+    end;
+    Library:OnAccent(ApplyAccent);
+
     -- [MOBILE PATCH] 淡入淡出：记录每个元素的目标透明度，渲染帧驱动 smoothstep 缓动整体插值
     local FadeTargets = {}
     for _, D in ipairs(Drawings) do
@@ -470,6 +478,9 @@ function BuildDrawingLoader(Title, WindowSize, LogoSrc)
     function Loader:Destroy()
         if Destroyed then return end
         Destroyed = true
+        for K, Fn in ipairs(Library.AccentCallbacks) do -- [MOBILE PATCH] 注销主题色监听
+            if Fn == ApplyAccent then table.remove(Library.AccentCallbacks, K) break end
+        end
         Fade(1, 0, 0.3) -- [MOBILE PATCH] 淡出后再销毁
         SlideDone = true
         for _, D in ipairs(Drawings) do pcall(function() D:Remove() end) end
