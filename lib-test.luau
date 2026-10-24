@@ -814,6 +814,43 @@ function Library:RegisterFont(Name, Url, Weight, Style)
 	return getcustomasset(DescPath);
 end;
 
+-- [MOBILE PATCH] 调色板弹窗增强：顶部条可拖动、右上角 × 关闭；
+-- 色块登记进全局表，点击别的色块不再误关已打开的调色板（多开，每色块仍只有一个弹窗）。
+Library._CpSwatches = Library._CpSwatches or {};
+function Library:_RegisterCpSwatch(Swatch)
+	table.insert(self._CpSwatches, Swatch);
+end;
+function Library:_InsideAnyCpSwatch(Mx, My)
+	for _, S in ipairs(self._CpSwatches) do
+		local Ok, Inside = pcall(function()
+			if not S.Parent then return false end;
+			local Ap, Sz = S.AbsolutePosition, S.AbsoluteSize;
+			return Mx >= Ap.X and Mx <= Ap.X + Sz.X and My >= Ap.Y and My <= Ap.Y + Sz.Y;
+		end);
+		if Ok and Inside then return true end;
+	end;
+	return false;
+end;
+function Library:_EnhanceColorPickerPopup(PickerHolder, DragHandle, CloseFn)
+	local CloseBtn = self:CreateInstance("TextButton", {
+		Name                   = "Close";
+		Parent                 = PickerHolder;
+		AnchorPoint            = Vector2.new(1, 0);
+		Position               = UDim2.new(1, -3, 0, 2);
+		Size                   = UDim2.fromOffset(16, 16);
+		BackgroundTransparency = 1;
+		BorderSizePixel        = 0;
+		Text                   = "×";
+		TextColor3             = Color3.fromHex("8C8F99");
+		TextSize               = 16;
+		ZIndex                 = 80;
+	});
+	Library:Connection(CloseBtn.MouseButton1Click, function() CloseFn() end);
+	Library:Connection(CloseBtn.MouseEnter, function() CloseBtn.TextColor3 = Color3.fromHex("FFFFFF") end);
+	Library:Connection(CloseBtn.MouseLeave, function() CloseBtn.TextColor3 = Color3.fromHex("8C8F99") end);
+	if DragHandle then self:Draggable(PickerHolder, DragHandle) end;
+end;
+
 function Library:Draggable(TargetFrame, DragHandle, IgnoreLock)
 	local Handle = DragHandle or TargetFrame;
 	local Dragging = false;
@@ -1715,6 +1752,40 @@ local function BuildSection(Host, SecOpts)
 	});
 
 	local SecRef = { Name = SecName, Frame = Sec, Title = SecTitle, Body = Body };
+
+	-- [MOBILE PATCH] GroupBox 展开/收缩（Obsidian 同款）：标题栏右侧 −/+ 按钮
+	local CollapseBtn = Library:CreateInstance("TextButton", {
+		Name                   = "Collapse";
+		Parent                 = Sec;
+		AnchorPoint            = Vector2.new(1, 0.5);
+		Position               = UDim2.new(1, -6, 0, 2);
+		Size                   = UDim2.fromOffset(14, 14);
+		BackgroundTransparency = 1;
+		BorderSizePixel        = 0;
+		Text                   = "-";
+		TextColor3             = Color3.fromHex("8C8F99");
+		TextSize               = 14;
+		ZIndex                 = 7;
+	});
+	local Collapsed = false;
+	function SecRef:SetCollapsed(B)
+		Collapsed = B and true or false;
+		Body.Visible = not Collapsed;
+		CollapseBtn.Text = Collapsed and "+" or "-";
+		if Collapsed then -- 定格成标题高度，避免自动尺寸把框压扁
+			Sec.AutomaticSize = Enum.AutomaticSize.None;
+			Sec.Size = UDim2.new(1, 0, 0, 16);
+		else
+			Sec.AutomaticSize = Enum.AutomaticSize.Y;
+			Sec.Size = UDim2.new(1, 0, 0, 0);
+		end;
+	end;
+	function SecRef:ToggleCollapsed() self:SetCollapsed(not Collapsed) end;
+	function SecRef:IsCollapsed() return Collapsed end;
+	SecRef.CollapseButton = CollapseBtn;
+	Library:Connection(CollapseBtn.MouseButton1Click, function() SecRef:ToggleCollapsed() end);
+	Library:Connection(CollapseBtn.MouseEnter, function() CollapseBtn.TextColor3 = Color3.fromHex("FFFFFF") end);
+	Library:Connection(CollapseBtn.MouseLeave, function() CollapseBtn.TextColor3 = Color3.fromHex("8C8F99") end);
 
 	function SecRef:Toggle(Opts)
 		Opts = typeof(Opts) == "table" and Opts or {};
@@ -2877,6 +2948,8 @@ local function BuildSection(Host, SecOpts)
 				end);
 			end;
 			Library:Connection(Swatch.MouseButton1Click, function() SetVisible(not Open) end);
+		Library:_RegisterCpSwatch(Swatch); -- [MOBILE PATCH] 多开支持
+		Library:_EnhanceColorPickerPopup(PickerHolder, TabBar, function() SetVisible(false) end); -- [MOBILE PATCH] 可拖动 + 右上角 × 关闭
 			HookDown(SatLayer,  function(B) DraggingSat   = B end);
 			HookDown(ValLayer,  function(B) DraggingSat   = B end);
 			HookDown(HueArea,   function(B) DraggingHue   = B end);
@@ -2917,7 +2990,7 @@ local function BuildSection(Host, SecOpts)
 					local Ap, Sz = F.AbsolutePosition, F.AbsoluteSize;
 					return Mx >= Ap.X and Mx <= Ap.X + Sz.X and My >= Ap.Y and My <= Ap.Y + Sz.Y;
 				end;
-				if not Inside(PickerHolder) and not Inside(Swatch) then
+				if not Inside(PickerHolder) and not Inside(Swatch) and not Library:_InsideAnyCpSwatch(Mx, My) then -- [MOBILE PATCH] 多开调色板
 					SetVisible(false);
 				end;
 			end);
@@ -4246,6 +4319,8 @@ end;
 		end;
 
 		Library:Connection(Swatch.MouseButton1Click, function() SetVisible(not Open) end);
+		Library:_RegisterCpSwatch(Swatch); -- [MOBILE PATCH] 多开支持
+		Library:_EnhanceColorPickerPopup(PickerHolder, TabBar, function() SetVisible(false) end); -- [MOBILE PATCH] 可拖动 + 右上角 × 关闭
 		HookDown(SatLayer,  function(B) DraggingSat   = B end);
 		HookDown(ValLayer,  function(B) DraggingSat   = B end);
 		HookDown(HueArea,   function(B) DraggingHue   = B end);
@@ -4293,7 +4368,7 @@ end;
 				local Ap, Sz = F.AbsolutePosition, F.AbsoluteSize;
 				return Mx >= Ap.X and Mx <= Ap.X + Sz.X and My >= Ap.Y and My <= Ap.Y + Sz.Y;
 			end;
-			if not Inside(PickerHolder) and not Inside(Swatch) then
+			if not Inside(PickerHolder) and not Inside(Swatch) and not Library:_InsideAnyCpSwatch(Mx, My) then -- [MOBILE PATCH] 多开调色板
 				SetVisible(false);
 			end;
 		end);
@@ -5556,6 +5631,36 @@ end;
 	local Window = { Gui = Gui, Outer = Outer, TopLine = TopLine, Content = Content };
 	Window._Tabs = {};
 
+	-- [MOBILE PATCH] Tab 布局：Sidebar = 左侧竖排边栏（默认），Native = 原生顶部横排
+	Library.TabStyle = Library.TabStyle or "Sidebar";
+	function Library:_ApplyTabLayout(Win)
+		local Bar = Win.TabBar;
+		if not Bar then return end;
+		local Sidebar = (self.TabStyle == "Sidebar");
+		local Layout = Bar:FindFirstChildOfClass("UIListLayout");
+		if Layout then
+			Layout.FillDirection = Sidebar and Enum.FillDirection.Vertical or Enum.FillDirection.Horizontal;
+			Layout.Padding       = Sidebar and UDim.new(0, 2) or UDim.new(0, 0);
+		end;
+		Bar.Position = UDim2.new(0, 0, 0, 0);
+		Bar.Size     = Sidebar and UDim2.new(0, 112, 1, 0) or UDim2.new(1, 0, 0, 24);
+		local N = math.max(#Win._Tabs, 1);
+		for _, T in Win._Tabs do
+			T.Button.Size = Sidebar and UDim2.new(1, 0, 0, 24) or UDim2.new(1 / N, 0, 1, 0);
+			if T.Separator then T.Separator.Visible = not Sidebar end;
+			T._PageHome = Sidebar and UDim2.new(0, 116, 0, 0) or UDim2.new(0, 0, 0, 24);
+			T.Page.Position = T._PageHome;
+			T.Page.Size     = Sidebar and UDim2.new(1, -116, 1, 0) or UDim2.new(1, 0, 1, -24);
+		end;
+	end;
+	function Library:SetTabStyle(V)
+		V = tostring(V or "");
+		self.TabStyle = (V == "Native" or V == "原生") and "Native" or "Sidebar";
+		for _, W in ipairs(self._Windows or {}) do
+			pcall(function() self:_ApplyTabLayout(W) end);
+		end;
+	end;
+
 	function Window:Tab(NameOrOpts)
 		local TabOpts = typeof(NameOrOpts) == "table" and NameOrOpts or { Name = tostring(NameOrOpts) };
 		local TabName = tostring(TabOpts.Name or TabOpts.Title or "Tab");
@@ -5852,8 +5957,9 @@ RegisterGradLerp(GradEntry)
 				-- [MOBILE PATCH] rise-in: content slides up 8px while fading in
 				-- (only on a real tab switch; cheap — two tweens on one CanvasGroup)
 				if WasHidden then
-					self.Page.Position = UDim2.new(0, 0, 0, 32);
-					Library:Tween(self.Page, PageInfo, { Position = UDim2.new(0, 0, 0, 24) }):Play();
+					local Home = self._PageHome or UDim2.new(0, 0, 0, 24); -- [MOBILE PATCH] 适配侧边栏布局
+					self.Page.Position = Home + UDim2.fromOffset(0, 8);
+					Library:Tween(self.Page, PageInfo, { Position = Home }):Play();
 				end;
 				local Lo = self.IsLeft  and 1 or 0;
 				local Ro = self.IsRight and 1 or 0;
@@ -5870,9 +5976,10 @@ RegisterGradLerp(GradEntry)
 				local P = self.Page;
 				Library:Tween(P, PageInfo, { GroupTransparency = 1 }):Play();
 				-- [MOBILE PATCH] matching slide-down while the page fades out
-				Library:Tween(P, PageInfo, { Position = UDim2.new(0, 0, 0, 32) }):Play();
+				local Home = self._PageHome or UDim2.new(0, 0, 0, 24); -- [MOBILE PATCH] 适配侧边栏布局
+				Library:Tween(P, PageInfo, { Position = Home + UDim2.fromOffset(0, 8) }):Play();
 				task.delay(PageInfo.Time, function()
-					if not self.Active then P.Visible = false; P.Position = UDim2.new(0, 0, 0, 24) end;
+					if not self.Active then P.Visible = false; P.Position = Home end;
 				end);
 				Library:Tween(Bg, BgInfo, {
 					Position = UDim2.new(0, 0, 0, 0);
@@ -5918,6 +6025,7 @@ RegisterGradLerp(GradEntry)
 		if N == 1 then
 			TabRef:SetActive(true);
 		end;
+		Library:_ApplyTabLayout(self); -- [MOBILE PATCH] 按当前 Tab 形式重排（侧边栏/原生）
 
 		local SepInfo = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
 		local function FadePiece(P, T)
@@ -5978,6 +6086,7 @@ RegisterGradLerp(GradEntry)
 		return TabRef;
 	end;
 	self.CurrentlyOpen = Window;
+	Library._Windows = Library._Windows or {}; table.insert(Library._Windows, Window); -- [MOBILE PATCH] Tab 形式统一切换用
 
 	Window.Visible = true;
 	Window._ActiveFade = nil; -- [MOBILE PATCH] in-flight single-driver fade connection
@@ -6064,6 +6173,11 @@ RegisterGradLerp(GradEntry)
 	end;
 
 	function Window:Destroy()
+		if Library._Windows then -- [MOBILE PATCH] 从窗口注册表移除
+			for K, W in ipairs(Library._Windows) do
+				if W == self then table.remove(Library._Windows, K) break end;
+			end;
+		end;
 		Gui:Destroy();
 		if Library.CurrentlyOpen == self then Library.CurrentlyOpen = nil end;
 	end;
@@ -7309,6 +7423,12 @@ ApplySettingsContents = function(self)
 		});
 
 		local SecMenu = self:Section({ Name = "Menu", Side = "Left" });
+		SecMenu:Dropdown({
+			Name    = "Tab Style"; Flag = "TabStyle";
+			Options = { "Sidebar", "Native" };
+			Default = "Sidebar";
+			Callback = function(V) Library:SetTabStyle(V) end; -- [MOBILE PATCH] Tab 形式：侧边栏(默认)/原生
+		});
 		SecMenu:Dropdown({
 			Name    = "Notification Position"; Flag = "NotifyPosition";
 			Options = { "Top Right", "Top Left" };
