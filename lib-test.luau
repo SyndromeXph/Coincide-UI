@@ -3012,9 +3012,7 @@ local function BuildSection(Host, SecOpts)
 					local Ap, Sz = F.AbsolutePosition, F.AbsoluteSize;
 					return Mx >= Ap.X and Mx <= Ap.X + Sz.X and My >= Ap.Y and My <= Ap.Y + Sz.Y;
 				end;
-				if not Inside(PickerHolder) and not Inside(Swatch) and not Library:_InsideAnyCpSwatch(Mx, My) then -- [MOBILE PATCH] 多开调色板
-					SetVisible(false);
-				end;
+				-- [MOBILE PATCH] 不再点外自动关闭：只有 × 按钮或再次点击对应色块才关闭（多开互不影响）
 			end);
 
 			Library.Options[Flag] = {
@@ -4390,9 +4388,7 @@ end;
 				local Ap, Sz = F.AbsolutePosition, F.AbsoluteSize;
 				return Mx >= Ap.X and Mx <= Ap.X + Sz.X and My >= Ap.Y and My <= Ap.Y + Sz.Y;
 			end;
-			if not Inside(PickerHolder) and not Inside(Swatch) and not Library:_InsideAnyCpSwatch(Mx, My) then -- [MOBILE PATCH] 多开调色板
-				SetVisible(false);
-			end;
+			-- [MOBILE PATCH] 不再点外自动关闭：只有 × 按钮或再次点击对应色块才关闭（多开互不影响）
 		end);
 
 		if Opts.Tooltip then Library:Tooltip(Row, Opts.Tooltip) end;
