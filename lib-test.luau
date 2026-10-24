@@ -848,7 +848,13 @@ function Library:_EnhanceColorPickerPopup(PickerHolder, DragHandle, CloseFn)
 	Library:Connection(CloseBtn.MouseButton1Click, function() CloseFn() end);
 	Library:Connection(CloseBtn.MouseEnter, function() CloseBtn.TextColor3 = Color3.fromHex("FFFFFF") end);
 	Library:Connection(CloseBtn.MouseLeave, function() CloseBtn.TextColor3 = Color3.fromHex("8C8F99") end);
-	if DragHandle then self:Draggable(PickerHolder, DragHandle) end;
+	if DragHandle then
+		self:Draggable(PickerHolder, DragHandle);
+		-- [MOBILE PATCH] Tab 按钮会吃掉 InputBegan，顶部条实际上点不到——把子按钮也注册为拖拽柄
+		for _, Ch in ipairs(DragHandle:GetChildren()) do
+			if Ch:IsA("GuiButton") then self:Draggable(PickerHolder, Ch) end;
+		end;
+	end;
 end;
 
 function Library:Draggable(TargetFrame, DragHandle, IgnoreLock)
@@ -1768,17 +1774,33 @@ local function BuildSection(Host, SecOpts)
 		ZIndex                 = 7;
 	});
 	local Collapsed = false;
+	local CollapseAnim = 0;
 	function SecRef:SetCollapsed(B)
-		Collapsed = B and true or false;
-		Body.Visible = not Collapsed;
+		B = B and true or false;
+		if B == Collapsed then return end;
+		Collapsed = B;
+		CollapseAnim += 1;
+		local Mine = CollapseAnim;
 		CollapseBtn.Text = Collapsed and "+" or "-";
-		if Collapsed then -- 定格成标题高度，避免自动尺寸把框压扁
-			Sec.AutomaticSize = Enum.AutomaticSize.None;
-			Sec.Size = UDim2.new(1, 0, 0, 16);
-		else
-			Sec.AutomaticSize = Enum.AutomaticSize.Y;
-			Sec.Size = UDim2.new(1, 0, 0, 0);
-		end;
+		-- [MOBILE PATCH] 高度补间过渡：定格自动尺寸 → 缓动到目标高 → 恢复
+		Sec.AutomaticSize = Enum.AutomaticSize.None;
+		Sec.ClipsDescendants = true;
+		Body.Visible = not Collapsed;
+		task.defer(function()
+			if Mine ~= CollapseAnim then return end;
+			local TargetH = Collapsed and 16 or (12 + Body.AbsoluteSize.Y);
+			Library:Tween(Sec, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				Size = UDim2.new(1, 0, 0, TargetH);
+			}):Play();
+			task.delay(0.22, function()
+				if Mine ~= CollapseAnim then return end;
+				Sec.ClipsDescendants = false;
+				if not Collapsed then
+					Sec.AutomaticSize = Enum.AutomaticSize.Y;
+					Sec.Size = UDim2.new(1, 0, 0, 0);
+				end;
+			end);
+		end);
 	end;
 	function SecRef:ToggleCollapsed() self:SetCollapsed(not Collapsed) end;
 	function SecRef:IsCollapsed() return Collapsed end;
@@ -5649,7 +5671,10 @@ end;
 			T.Button.Size = Sidebar and UDim2.new(1, 0, 0, 24) or UDim2.new(1 / N, 0, 1, 0);
 			if T.Separator then T.Separator.Visible = not Sidebar end;
 			T._PageHome = Sidebar and UDim2.new(0, 116, 0, 0) or UDim2.new(0, 0, 0, 24);
-			T.Page.Position = T._PageHome;
+			Library:Tween(T.Page, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				Position = T._PageHome;
+				Size     = Sidebar and UDim2.new(1, -116, 1, 0) or UDim2.new(1, 0, 1, -24);
+			}):Play(); -- [MOBILE PATCH] 切换布局时用补间覆盖旧补间，位置不会被抢回去
 			T.Page.Size     = Sidebar and UDim2.new(1, -116, 1, 0) or UDim2.new(1, 0, 1, -24);
 		end;
 	end;
@@ -6015,8 +6040,10 @@ RegisterGradLerp(GradEntry)
 		table.insert(self._Tabs, TabRef);
 
 		local N = #self._Tabs;
+		-- [MOBILE PATCH] 先排布局再 SetActive：否则激活页的滑入补间会把 Page.Position
+		-- 拉回原生位置（内容压到侧边栏下面），按钮尺寸也统一交给布局函数
+		Library:_ApplyTabLayout(self);
 		for I, T in self._Tabs do
-			T.Button.Size = UDim2.new(1 / N, 0, 1, 0);
 			T.IsLeft  = (I == 1);
 			T.IsRight = (I == N);
 			T:SetActive(T.Active);
@@ -6025,7 +6052,6 @@ RegisterGradLerp(GradEntry)
 		if N == 1 then
 			TabRef:SetActive(true);
 		end;
-		Library:_ApplyTabLayout(self); -- [MOBILE PATCH] 按当前 Tab 形式重排（侧边栏/原生）
 
 		local SepInfo = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
 		local function FadePiece(P, T)
