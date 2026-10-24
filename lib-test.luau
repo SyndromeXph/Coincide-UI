@@ -1820,8 +1820,9 @@ local function BuildSection(Host, SecOpts)
 	Library:Connection(CollapseBtn.MouseEnter, function() CollapseBtn.TextColor3 = Color3.fromHex("FFFFFF") end);
 	Library:Connection(CollapseBtn.MouseLeave, function() CollapseBtn.TextColor3 = Color3.fromHex("8C8F99") end);
 
-	-- [MOBILE PATCH] Tabbox（Obsidian 同款）：分组框内的小页签容器。
-	--   local Box = Section:Tabbox();  local T1 = Box:AddTab("Tab 1");  T1:AddToggle(...)
+	-- [MOBILE PATCH] Tabbox（Obsidian 同款）：整行均分深色页签按钮 + 激活 accent 下划线，
+	-- 切换时内容页淡入 + 轻微上滑过渡。
+	--   local Box = Groupbox:AddTabbox();  local T1 = Box:AddTab("Tab 1");  T1:AddToggle(...)
 	-- 页签对象和分组一样支持所有控件写法（Toggle/Slider/... 与 AddToggle/AddSlider/...）。
 	function SecRef:Tabbox(Opts)
 		Opts = typeof(Opts) == "table" and Opts or {};
@@ -1836,7 +1837,7 @@ local function BuildSection(Host, SecOpts)
 		local Strip = Library:CreateInstance("Frame", {
 			Name                   = "Tabs";
 			Parent                 = Box;
-			Size                   = UDim2.new(1, 0, 0, 18);
+			Size                   = UDim2.new(1, 0, 0, 24);
 			BackgroundTransparency = 1;
 			BorderSizePixel        = 0;
 		});
@@ -1844,12 +1845,12 @@ local function BuildSection(Host, SecOpts)
 			Parent        = Strip;
 			FillDirection = Enum.FillDirection.Horizontal;
 			SortOrder     = Enum.SortOrder.LayoutOrder;
-			Padding       = UDim.new(0, 10);
+			Padding       = UDim.new(0, 0);
 		});
 		local Pages = Library:CreateInstance("Frame", {
 			Name                   = "Pages";
 			Parent                 = Box;
-			Position               = UDim2.new(0, 0, 0, 24);
+			Position               = UDim2.new(0, 0, 0, 30);
 			Size                   = UDim2.new(1, 0, 0, 0);
 			AutomaticSize          = Enum.AutomaticSize.Y;
 			BackgroundTransparency = 1;
@@ -1857,12 +1858,26 @@ local function BuildSection(Host, SecOpts)
 		});
 
 		local BoxRef = { Frame = Box, _Tabs = {} };
+		local TabSwitchInfo = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out);
 		local function Activate(TabObj)
 			for _, T in ipairs(BoxRef._Tabs) do
 				local On = (T == TabObj);
-				T.Body.Visible = On;
-				T._Btn.TextColor3 = On and Color3.fromHex("FFFFFF") or Color3.fromHex("8C8F99");
-				T._Line.BackgroundTransparency = On and 0 or 1;
+				T._Btn.TextColor3       = On and Color3.fromHex("FFFFFF") or Color3.fromHex("8C8F99");
+				T._Btn.BackgroundColor3 = On and Color3.fromHex("232323") or Color3.fromHex("181818");
+				Library:Tween(T._Line, TabSwitchInfo, { BackgroundTransparency = On and 0 or 1 }):Play();
+				if On then
+					-- [MOBILE PATCH] 切换动画：新页从下方 6px 淡入上滑
+					T.Body.Visible = true;
+					T.Body.GroupTransparency = 1;
+					T.Body.Position = UDim2.fromOffset(0, 6);
+					Library:Tween(T.Body, TabSwitchInfo, {
+						GroupTransparency = 0;
+						Position          = UDim2.fromOffset(0, 0);
+					}):Play();
+				else
+					T.Body.Visible = false;
+					T.Body.GroupTransparency = 1;
+				end;
 			end;
 		end;
 
@@ -1871,40 +1886,41 @@ local function BuildSection(Host, SecOpts)
 			local Btn = Library:CreateInstance("TextButton", {
 				Name                   = "Tab_" .. Name;
 				Parent                 = Strip;
-				Size                   = UDim2.new(0, 0, 1, 0);
-				AutomaticSize          = Enum.AutomaticSize.X;
-				BackgroundTransparency = 1;
+				Size                   = UDim2.new(1, 0, 1, 0);
+				BackgroundColor3       = Color3.fromHex("181818");
 				BorderSizePixel        = 0;
 				AutoButtonColor        = false;
 				Text                   = Name;
 				TextColor3             = Color3.fromHex("8C8F99");
 				TextSize               = 12;
-				ZIndex                 = 2;
 			});
 			if ProggyCleanFont then Btn.FontFace = ProggyCleanFont end;
-			Library:CreateInstance("UIPadding", {
-				Parent       = Btn;
-				PaddingLeft  = UDim.new(0, 2);
-				PaddingRight = UDim.new(0, 2);
+			Library:CreateInstance("UIStroke", {
+				Parent  = Btn;
+				Color   = Color3.fromHex("000000");
+				Thickness = 1;
+				ApplyStrokeMode = Enum.ApplyStrokeMode.Border;
 			});
 			local Line = Library:CreateInstance("Frame", { -- 激活页签的 accent 下划线
 				Parent                 = Btn;
 				AnchorPoint            = Vector2.new(0, 1);
-				Position               = UDim2.new(0, 0, 1, 2);
+				Position               = UDim2.new(0, 0, 1, 0);
 				Size                   = UDim2.new(1, 0, 0, 2);
 				BackgroundColor3       = Library.Accent;
 				BackgroundTransparency = 1;
 				BorderSizePixel        = 0;
+				ZIndex                 = 2;
 			});
 			Library:RegisterAccent(Line, "BackgroundColor3");
 
-			local PageBody = Library:CreateInstance("Frame", {
+			local PageBody = Library:CreateInstance("CanvasGroup", {
 				Name                   = "Page_" .. Name;
 				Parent                 = Pages;
 				Size                   = UDim2.new(1, 0, 0, 0);
 				AutomaticSize          = Enum.AutomaticSize.Y;
 				BackgroundTransparency = 1;
 				BorderSizePixel        = 0;
+				GroupTransparency      = 1;
 				Visible                = false;
 			});
 			Library:CreateInstance("UIListLayout", {
@@ -1924,8 +1940,10 @@ local function BuildSection(Host, SecOpts)
 			function TabObj:Activate() Activate(self) end;
 			Library:Connection(Btn.MouseButton1Click, function() Activate(TabObj) end);
 			table.insert(BoxRef._Tabs, TabObj);
+			local N = #BoxRef._Tabs;
+			for _, T in ipairs(BoxRef._Tabs) do T._Btn.Size = UDim2.new(1 / N, 0, 1, 0) end; -- 整行均分
 			if Library._EnhanceSection then Library._EnhanceSection(TabObj) end; -- Obsidian 式控件 API
-			if #BoxRef._Tabs == 1 then Activate(TabObj) end;
+			if N == 1 then Activate(TabObj) end;
 			return TabObj;
 		end;
 		BoxRef.AddTab = BoxRef.Tab; -- Obsidian 写法：Box:AddTab("...")
