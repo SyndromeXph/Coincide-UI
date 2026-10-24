@@ -1820,6 +1820,118 @@ local function BuildSection(Host, SecOpts)
 	Library:Connection(CollapseBtn.MouseEnter, function() CollapseBtn.TextColor3 = Color3.fromHex("FFFFFF") end);
 	Library:Connection(CollapseBtn.MouseLeave, function() CollapseBtn.TextColor3 = Color3.fromHex("8C8F99") end);
 
+	-- [MOBILE PATCH] Tabbox（Obsidian 同款）：分组框内的小页签容器。
+	--   local Box = Section:Tabbox();  local T1 = Box:AddTab("Tab 1");  T1:AddToggle(...)
+	-- 页签对象和分组一样支持所有控件写法（Toggle/Slider/... 与 AddToggle/AddSlider/...）。
+	function SecRef:Tabbox(Opts)
+		Opts = typeof(Opts) == "table" and Opts or {};
+		local Box = Library:CreateInstance("Frame", {
+			Name                   = "Tabbox";
+			Parent                 = Body;
+			Size                   = UDim2.new(1, 0, 0, 0);
+			AutomaticSize          = Enum.AutomaticSize.Y;
+			BackgroundTransparency = 1;
+			BorderSizePixel        = 0;
+		});
+		local Strip = Library:CreateInstance("Frame", {
+			Name                   = "Tabs";
+			Parent                 = Box;
+			Size                   = UDim2.new(1, 0, 0, 18);
+			BackgroundTransparency = 1;
+			BorderSizePixel        = 0;
+		});
+		Library:CreateInstance("UIListLayout", {
+			Parent        = Strip;
+			FillDirection = Enum.FillDirection.Horizontal;
+			SortOrder     = Enum.SortOrder.LayoutOrder;
+			Padding       = UDim.new(0, 10);
+		});
+		local Pages = Library:CreateInstance("Frame", {
+			Name                   = "Pages";
+			Parent                 = Box;
+			Position               = UDim2.new(0, 0, 0, 24);
+			Size                   = UDim2.new(1, 0, 0, 0);
+			AutomaticSize          = Enum.AutomaticSize.Y;
+			BackgroundTransparency = 1;
+			BorderSizePixel        = 0;
+		});
+
+		local BoxRef = { Frame = Box, _Tabs = {} };
+		local function Activate(TabObj)
+			for _, T in ipairs(BoxRef._Tabs) do
+				local On = (T == TabObj);
+				T.Body.Visible = On;
+				T._Btn.TextColor3 = On and Color3.fromHex("FFFFFF") or Color3.fromHex("8C8F99");
+				T._Line.BackgroundTransparency = On and 0 or 1;
+			end;
+		end;
+
+		function BoxRef:Tab(A)
+			local Name = typeof(A) == "table" and tostring(A.Name or A.Text or A.Title or "Tab") or tostring(A);
+			local Btn = Library:CreateInstance("TextButton", {
+				Name                   = "Tab_" .. Name;
+				Parent                 = Strip;
+				Size                   = UDim2.new(0, 0, 1, 0);
+				AutomaticSize          = Enum.AutomaticSize.X;
+				BackgroundTransparency = 1;
+				BorderSizePixel        = 0;
+				AutoButtonColor        = false;
+				Text                   = Name;
+				TextColor3             = Color3.fromHex("8C8F99");
+				TextSize               = 12;
+				ZIndex                 = 2;
+			});
+			if ProggyCleanFont then Btn.FontFace = ProggyCleanFont end;
+			Library:CreateInstance("UIPadding", {
+				Parent       = Btn;
+				PaddingLeft  = UDim.new(0, 2);
+				PaddingRight = UDim.new(0, 2);
+			});
+			local Line = Library:CreateInstance("Frame", { -- 激活页签的 accent 下划线
+				Parent                 = Btn;
+				AnchorPoint            = Vector2.new(0, 1);
+				Position               = UDim2.new(0, 0, 1, 2);
+				Size                   = UDim2.new(1, 0, 0, 2);
+				BackgroundColor3       = Library.Accent;
+				BackgroundTransparency = 1;
+				BorderSizePixel        = 0;
+			});
+			Library:RegisterAccent(Line, "BackgroundColor3");
+
+			local PageBody = Library:CreateInstance("Frame", {
+				Name                   = "Page_" .. Name;
+				Parent                 = Pages;
+				Size                   = UDim2.new(1, 0, 0, 0);
+				AutomaticSize          = Enum.AutomaticSize.Y;
+				BackgroundTransparency = 1;
+				BorderSizePixel        = 0;
+				Visible                = false;
+			});
+			Library:CreateInstance("UIListLayout", {
+				Parent        = PageBody;
+				FillDirection = Enum.FillDirection.Vertical;
+				SortOrder     = Enum.SortOrder.LayoutOrder;
+				Padding       = UDim.new(0, 4);
+			});
+			Library:CreateInstance("UIPadding", {
+				Parent        = PageBody;
+				PaddingBottom = UDim.new(0, 4);
+			});
+
+			local TabObj = setmetatable({ Name = Name, Body = PageBody, Frame = PageBody }, { __index = SecRef });
+			TabObj._Btn  = Btn;
+			TabObj._Line = Line;
+			function TabObj:Activate() Activate(self) end;
+			Library:Connection(Btn.MouseButton1Click, function() Activate(TabObj) end);
+			table.insert(BoxRef._Tabs, TabObj);
+			if Library._EnhanceSection then Library._EnhanceSection(TabObj) end; -- Obsidian 式控件 API
+			if #BoxRef._Tabs == 1 then Activate(TabObj) end;
+			return TabObj;
+		end;
+		BoxRef.AddTab = BoxRef.Tab; -- Obsidian 写法：Box:AddTab("...")
+		return BoxRef;
+	end;
+
 	function SecRef:Toggle(Opts)
 		Opts = typeof(Opts) == "table" and Opts or {};
 		local Name     = tostring(Opts.Name or Opts.Title or Opts.Text or "Toggle");
@@ -11027,6 +11139,7 @@ do
 			return Proxy;
 		end;
 		Sec.AddCheckbox = Sec.AddToggle; -- Linoria 别名
+		Library._EnhanceSection = EnhanceSection; -- [MOBILE PATCH] Tabbox 页签也要挂 Obsidian API
 
 		Sec.AddButton = function(self, A, B)
 			local Text, Fn, Confirm;
